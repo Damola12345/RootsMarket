@@ -1,2 +1,2 @@
-# cloudcart-platform
-cloud-native microservices demo application for learning Kubernetes, observability, GitOps, and SRE failure scenarios.
+RootsMarket
+Cloud-native marketplace for traditional food products.
