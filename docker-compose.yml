@@ -8,6 +8,7 @@ x-common-env: &common-env
   POSTGRES_PASSWORD: 
   REDIS_URL: redis://redis:6379
   CACHE_TTL_SECONDS: 60
+  RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672
 
 services:
   postgres:
@@ -100,6 +101,61 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+
+  order-service:
+    build:
+      context: ./services/order-service
+    container_name: rootsmarket-order-service
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      <<: *common-env
+      PORT: 3003
+      SERVICE_NAME: order-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+
+  payment-service:
+    build:
+      context: ./services/payment-service
+    container_name: rootsmarket-payment-service
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    environment:
+      <<: *common-env
+      PORT: 3004
+      SERVICE_NAME: payment-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+    container_name: rootsmarket-notification-service
+    restart: unless-stopped
+    ports:
+      - "3005:3005"
+    environment:
+      <<: *common-env
+      PORT: 3005
+      SERVICE_NAME: notification-service
+    depends_on:
+      rabbitmq:
         condition: service_healthy
     networks:
       - rootsmarket-net
