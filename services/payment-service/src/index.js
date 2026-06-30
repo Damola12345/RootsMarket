@@ -16,7 +16,6 @@ const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
 app.use(express.json());
 
-// Structured JSON logger for readable service logs.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -29,7 +28,6 @@ function log(level, message, meta = {}) {
   );
 }
 
-// PostgreSQL connection pool.
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: Number(process.env.POSTGRES_PORT || 5432),
@@ -42,7 +40,6 @@ const pool = new Pool({
 let rabbitConnection = null;
 let rabbitChannel = null;
 
-// Health endpoint for Docker/Kubernetes checks.
 app.get("/health", async (req, res) => {
   const health = {
     status: "healthy",
@@ -56,22 +53,78 @@ app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     health.dependencies.postgres = "healthy";
-  } catch (err) {
+  } catch {
     health.status = "unhealthy";
     health.dependencies.postgres = "unhealthy";
   }
 
-  if (rabbitChannel) {
-    health.dependencies.rabbitmq = "healthy";
-  } else {
-    health.status = "unhealthy";
-    health.dependencies.rabbitmq = "unhealthy";
-  }
+  health.dependencies.rabbitmq = rabbitChannel ? "healthy" : "unhealthy";
+  if (!rabbitChannel) health.status = "unhealthy";
 
   res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// Publish payment.completed after payment is processed.
+// List all payments for frontend Payments page.
+app.get("/payments", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.order_id,
+        p.status,
+        p.amount,
+        p.created_at,
+        o.user_id,
+        u.name AS customer_name,
+        u.email AS customer_email
+      FROM payments p
+      JOIN orders o ON o.id = p.order_id
+      JOIN users u ON u.id = o.user_id
+      ORDER BY p.created_at DESC
+      `
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get one payment by ID.
+app.get("/payments/:id", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.order_id,
+        p.status,
+        p.amount,
+        p.created_at,
+        o.user_id,
+        u.name AS customer_name,
+        u.email AS customer_email
+      FROM payments p
+      JOIN orders o ON o.id = p.order_id
+      JOIN users u ON u.id = o.user_id
+      WHERE p.id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "payment not found",
+      });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    next(err);
+  }
+});
+
 async function publishPaymentCompleted(event) {
   const payload = Buffer.from(JSON.stringify(event));
 
@@ -87,11 +140,9 @@ async function publishPaymentCompleted(event) {
   });
 }
 
-// Handle order.created messages.
 async function processOrderCreated(message) {
   const raw = message.content.toString();
   const event = JSON.parse(raw);
-
   const client = await pool.connect();
 
   try {
@@ -103,7 +154,7 @@ async function processOrderCreated(message) {
 
     await client.query("BEGIN");
 
-    // Idempotency guard: do not create duplicate payments for same order.
+    // Idempotency guard: avoid duplicate payments for the same order.
     const existingPayment = await client.query(
       `
       SELECT id, status
@@ -126,7 +177,6 @@ async function processOrderCreated(message) {
       return;
     }
 
-    // Create payment record.
     const paymentResult = await client.query(
       `
       INSERT INTO payments (order_id, status, amount)
@@ -138,7 +188,6 @@ async function processOrderCreated(message) {
 
     const payment = paymentResult.rows[0];
 
-    // Update order status after payment succeeds.
     await client.query(
       `
       UPDATE orders
@@ -175,27 +224,19 @@ async function processOrderCreated(message) {
       rawMessage: raw,
     });
 
-    // Requeue false prevents endless retry loops for bad messages.
     rabbitChannel.nack(message, false, false);
   } finally {
     client.release();
   }
 }
 
-// Connect to RabbitMQ and start consuming order.created.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
-  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, {
-    durable: true,
-  });
+  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, { durable: true });
+  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, { durable: true });
 
-  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, {
-    durable: true,
-  });
-
-  // Process one message at a time for predictable behavior in MVP.
   rabbitChannel.prefetch(1);
 
   await rabbitChannel.consume(ORDER_CREATED_QUEUE, processOrderCreated, {
@@ -207,6 +248,17 @@ async function connectRabbitMQ() {
     publishing: PAYMENT_COMPLETED_QUEUE,
   });
 }
+
+app.use((err, req, res, next) => {
+  log("error", "request_failed", {
+    error: err.message,
+    stack: process.env.NODE_ENV === "production" ? undefined : err.stack,
+  });
+
+  res.status(500).json({
+    error: "internal server error",
+  });
+});
 
 async function start() {
   await pool.query("SELECT 1");
@@ -228,9 +280,7 @@ async function shutdown() {
   log("info", "service_shutting_down");
 
   try {
-    if (rabbitChannel) {
-      await rabbitChannel.close();
-    }
+    if (rabbitChannel) await rabbitChannel.close();
   } catch (err) {
     log("warn", "rabbitmq_channel_shutdown_failed", {
       error: err.message || String(err),
@@ -238,9 +288,7 @@ async function shutdown() {
   }
 
   try {
-    if (rabbitConnection) {
-      await rabbitConnection.close();
-    }
+    if (rabbitConnection) await rabbitConnection.close();
   } catch (err) {
     log("warn", "rabbitmq_connection_shutdown_failed", {
       error: err.message || String(err),
