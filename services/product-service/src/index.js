@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
 const crypto = require("crypto");
@@ -10,6 +11,12 @@ const app = express();
 const SERVICE_NAME = "product-service";
 const PORT = process.env.PORT || 3002;
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
+
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+  })
+);
 
 // Parse incoming JSON request bodies
 app.use(express.json());

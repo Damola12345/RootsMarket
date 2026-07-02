@@ -120,3 +120,52 @@
   grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 22px;
 }
+
+.state-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 24px;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.error-card {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.error-card button {
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: #991b1b;
+  color: white;
+}
+
+.store-intro {
+  background: linear-gradient(135deg, #052e16, #166534);
+  color: white;
+  border-radius: 24px;
+  padding: 36px;
+  margin-bottom: 28px;
+}
+
+.store-intro p {
+  margin: 0 0 8px;
+  color: #86efac;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.store-intro h2 {
+  margin: 0;
+  font-size: 40px;
+}
+
+.store-intro span {
+  display: block;
+  margin-top: 10px;
+  color: #dcfce7;
+}

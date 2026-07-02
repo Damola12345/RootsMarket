@@ -1,3 +1,4 @@
+import { formatNaira } from "../utils/currency";
 import "./Cart.css";
 
 export default function Cart({ items, onRemoveItem, onCheckout }) {
@@ -19,7 +20,7 @@ export default function Cart({ items, onRemoveItem, onCheckout }) {
               <div>
                 <strong>{item.name}</strong>
                 <p>
-                  Qty {item.quantity} × ₦{Number(item.price).toLocaleString()}
+                  Qty {item.quantity} × {formatNaira(item.price)}
                 </p>
               </div>
 
@@ -29,7 +30,7 @@ export default function Cart({ items, onRemoveItem, onCheckout }) {
 
           <div className="cart-total">
             <span>Total</span>
-            <strong>₦{total.toLocaleString()}</strong>
+            <strong>{formatNaira(total)}</strong>
           </div>
 
           <button className="checkout-button" onClick={onCheckout}>

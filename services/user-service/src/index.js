@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
 const crypto = require("crypto");
@@ -10,12 +11,18 @@ const app = express();
 const SERVICE_NAME = "user-service";
 const PORT = process.env.PORT || 3001;
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-// Parse incoming JSON request bodies
+// Allow frontend requests from Vite during development.
+app.use(
+  cors({
+    origin: CORS_ORIGIN,
+  })
+);
+
+// Parse incoming JSON request bodies.
 app.use(express.json());
 
-// Simple structured JSON logger.
-// This makes logs easier to search later in Loki/ELK/AI incident assistant.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -28,11 +35,9 @@ function log(level, message, meta = {}) {
   );
 }
 
-// Add a request ID to every request.
-// This helps trace one request across multiple services later.
+// Add request ID to every request for traceability.
 app.use((req, res, next) => {
   req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
-
   res.setHeader("x-request-id", req.requestId);
 
   log("info", "request_received", {
@@ -44,8 +49,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// PostgreSQL connection pool.
-// Postgres is required because user data is stored there.
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: Number(process.env.POSTGRES_PORT || 5432),
@@ -55,8 +58,6 @@ const pool = new Pool({
   max: Number(process.env.POSTGRES_POOL_MAX || 10),
 });
 
-// Redis client.
-// Redis is used as a cache, so the service can still run if Redis is down.
 const redisClient = createClient({
   url: process.env.REDIS_URL || "redis://localhost:6379",
 });
@@ -67,8 +68,6 @@ redisClient.on("error", (err) => {
   });
 });
 
-// Read data from Redis cache.
-// If Redis is unavailable, return null and fall back to Postgres.
 async function getCache(key) {
   if (!redisClient.isOpen) return null;
 
@@ -85,7 +84,6 @@ async function getCache(key) {
   }
 }
 
-// Store data in Redis cache with TTL.
 async function setCache(key, value, ttl = CACHE_TTL_SECONDS) {
   if (!redisClient.isOpen) return;
 
@@ -99,8 +97,6 @@ async function setCache(key, value, ttl = CACHE_TTL_SECONDS) {
   }
 }
 
-// Delete cache keys after data changes.
-// This is basic cache invalidation.
 async function deleteCache(keys) {
   if (!redisClient.isOpen) return;
 
@@ -116,7 +112,6 @@ async function deleteCache(keys) {
   }
 }
 
-// Health endpoint checks service dependencies.
 app.get("/health", async (req, res) => {
   const health = {
     status: "healthy",
@@ -130,7 +125,7 @@ app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     health.dependencies.postgres = "healthy";
-  } catch (err) {
+  } catch {
     health.status = "unhealthy";
     health.dependencies.postgres = "unhealthy";
   }
@@ -142,15 +137,13 @@ app.get("/health", async (req, res) => {
     } else {
       health.dependencies.redis = "not_connected";
     }
-  } catch (err) {
+  } catch {
     health.dependencies.redis = "unhealthy";
   }
 
-  const statusCode = health.status === "healthy" ? 200 : 503;
-  res.status(statusCode).json(health);
+  res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// Create a new user.
 app.post("/users", async (req, res, next) => {
   try {
     const { name, email } = req.body;
@@ -170,7 +163,6 @@ app.post("/users", async (req, res, next) => {
       [name, email]
     );
 
-    // Invalidate users list cache after creating a new user.
     await deleteCache(["users:all"]);
 
     log("info", "user_created", {
@@ -190,8 +182,6 @@ app.post("/users", async (req, res, next) => {
   }
 });
 
-// List users.
-// Cache pattern: Redis first, Postgres on miss, then write back to Redis.
 app.get("/users", async (req, res, next) => {
   try {
     const cacheKey = "users:all";
@@ -227,8 +217,6 @@ app.get("/users", async (req, res, next) => {
   }
 });
 
-// Get one user by ID.
-// Uses Redis cache per user ID.
 app.get("/users/:id", async (req, res, next) => {
   try {
     const cacheKey = `users:${req.params.id}`;
@@ -271,7 +259,6 @@ app.get("/users/:id", async (req, res, next) => {
   }
 });
 
-// Central error handler.
 app.use((err, req, res, next) => {
   log("error", "request_failed", {
     requestId: req.requestId,
@@ -285,8 +272,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start service.
-// Postgres must work. Redis is optional.
 async function start() {
   await pool.query("SELECT 1");
   log("info", "postgres_connected");
@@ -301,11 +286,10 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", { port: PORT, corsOrigin: CORS_ORIGIN });
   });
 }
 
-// Prevent shutdown from running twice when pressing CTRL+C.
 let isShuttingDown = false;
 
 async function shutdown() {

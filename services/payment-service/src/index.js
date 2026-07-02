@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const amqp = require("amqplib");
 
@@ -8,12 +9,14 @@ const app = express();
 
 const SERVICE_NAME = "payment-service";
 const PORT = process.env.PORT || 3004;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const RABBITMQ_URL =
   process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
 
 const ORDER_CREATED_QUEUE = "order.created";
 const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
 function log(level, message, meta = {}) {
@@ -64,7 +67,6 @@ app.get("/health", async (req, res) => {
   res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// List all payments for frontend Payments page.
 app.get("/payments", async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -91,7 +93,6 @@ app.get("/payments", async (req, res, next) => {
   }
 });
 
-// Get one payment by ID.
 app.get("/payments/:id", async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -126,12 +127,14 @@ app.get("/payments/:id", async (req, res, next) => {
 });
 
 async function publishPaymentCompleted(event) {
-  const payload = Buffer.from(JSON.stringify(event));
-
-  rabbitChannel.sendToQueue(PAYMENT_COMPLETED_QUEUE, payload, {
-    persistent: true,
-    contentType: "application/json",
-  });
+  rabbitChannel.sendToQueue(
+    PAYMENT_COMPLETED_QUEUE,
+    Buffer.from(JSON.stringify(event)),
+    {
+      persistent: true,
+      contentType: "application/json",
+    }
+  );
 
   log("info", "payment_completed_event_published", {
     orderId: event.orderId,
@@ -154,7 +157,6 @@ async function processOrderCreated(message) {
 
     await client.query("BEGIN");
 
-    // Idempotency guard: avoid duplicate payments for the same order.
     const existingPayment = await client.query(
       `
       SELECT id, status
@@ -267,7 +269,10 @@ async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 

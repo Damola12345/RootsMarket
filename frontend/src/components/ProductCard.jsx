@@ -1,3 +1,4 @@
+import { formatNaira } from "../utils/currency";
 import "./ProductCard.css";
 
 export default function ProductCard({ product, onAddToCart }) {
@@ -12,7 +13,7 @@ export default function ProductCard({ product, onAddToCart }) {
         <p>{product.description}</p>
 
         <div className="product-meta">
-          <strong>₦{Number(product.price).toLocaleString()}</strong>
+          <strong>{formatNaira(product.price)}</strong>
           <span>{product.stock} in stock</span>
         </div>
 

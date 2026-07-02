@@ -1,21 +1,22 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const amqp = require("amqplib");
 
 const app = express();
 
 const SERVICE_NAME = "notification-service";
 const PORT = process.env.PORT || 3005;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const RABBITMQ_URL =
   process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
 
 const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
-// Structured JSON logger.
-// Later, Loki/OpenTelemetry/AI assistant can parse these logs easily.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -31,7 +32,6 @@ function log(level, message, meta = {}) {
 let rabbitConnection = null;
 let rabbitChannel = null;
 
-// Health endpoint for Docker/Kubernetes checks.
 app.get("/health", (req, res) => {
   const rabbitHealthy = Boolean(rabbitChannel);
 
@@ -44,9 +44,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Process payment.completed events.
-// For now, notification means logging to console.
-// Later this can become email, Slack, webhook, SMS, etc.
 async function processPaymentCompleted(message) {
   const raw = message.content.toString();
 
@@ -75,12 +72,10 @@ async function processPaymentCompleted(message) {
       rawMessage: raw,
     });
 
-    // Do not requeue malformed messages in MVP.
     rabbitChannel.nack(message, false, false);
   }
 }
 
-// Connect to RabbitMQ and consume payment.completed events.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
@@ -104,7 +99,10 @@ async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 

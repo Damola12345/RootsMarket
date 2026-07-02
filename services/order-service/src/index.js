@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const amqp = require("amqplib");
 const crypto = require("crypto");
@@ -9,10 +10,17 @@ const app = express();
 
 const SERVICE_NAME = "order-service";
 const PORT = process.env.PORT || 3003;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const RABBITMQ_URL =
   process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
 
 const ORDER_CREATED_QUEUE = "order.created";
+
+app.use(
+  cors({
+    origin: CORS_ORIGIN,
+  })
+);
 
 app.use(express.json());
 
@@ -28,7 +36,6 @@ function log(level, message, meta = {}) {
   );
 }
 
-// Adds a request ID to every request for traceability.
 app.use((req, res, next) => {
   req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
   res.setHeader("x-request-id", req.requestId);
@@ -42,7 +49,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// PostgreSQL is the source of truth for orders and order items.
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: Number(process.env.POSTGRES_PORT || 5432),
@@ -55,7 +61,6 @@ const pool = new Pool({
 let rabbitConnection = null;
 let rabbitChannel = null;
 
-// Connect to RabbitMQ and declare the order.created queue.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
@@ -69,18 +74,19 @@ async function connectRabbitMQ() {
   });
 }
 
-// Publish an order.created event after an order is saved.
 async function publishOrderCreated(event) {
   if (!rabbitChannel) {
     throw new Error("RabbitMQ channel is not available");
   }
 
-  const payload = Buffer.from(JSON.stringify(event));
-
-  rabbitChannel.sendToQueue(ORDER_CREATED_QUEUE, payload, {
-    persistent: true,
-    contentType: "application/json",
-  });
+  rabbitChannel.sendToQueue(
+    ORDER_CREATED_QUEUE,
+    Buffer.from(JSON.stringify(event)),
+    {
+      persistent: true,
+      contentType: "application/json",
+    }
+  );
 
   log("info", "order_created_event_published", {
     orderId: event.orderId,
@@ -89,7 +95,6 @@ async function publishOrderCreated(event) {
   });
 }
 
-// Health endpoint checks Postgres and RabbitMQ.
 app.get("/health", async (req, res) => {
   const health = {
     status: "healthy",
@@ -103,7 +108,7 @@ app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     health.dependencies.postgres = "healthy";
-  } catch (err) {
+  } catch {
     health.status = "unhealthy";
     health.dependencies.postgres = "unhealthy";
   }
@@ -118,14 +123,6 @@ app.get("/health", async (req, res) => {
   res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// Create an order.
-// Expected body:
-// {
-//   "userId": "uuid",
-//   "items": [
-//     { "productId": "uuid", "quantity": 2 }
-//   ]
-// }
 app.post("/orders", async (req, res, next) => {
   const client = await pool.connect();
 
@@ -148,7 +145,6 @@ app.post("/orders", async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    // Confirm user exists.
     const userResult = await client.query(
       `
       SELECT id
@@ -168,7 +164,6 @@ app.post("/orders", async (req, res, next) => {
     let totalAmount = 0;
     const orderItems = [];
 
-    // Fetch product prices and validate stock.
     for (const item of items) {
       const productResult = await client.query(
         `
@@ -198,9 +193,8 @@ app.post("/orders", async (req, res, next) => {
       }
 
       const price = Number(product.price);
-      const lineTotal = price * quantity;
 
-      totalAmount += lineTotal;
+      totalAmount += price * quantity;
 
       orderItems.push({
         productId: product.id,
@@ -210,7 +204,6 @@ app.post("/orders", async (req, res, next) => {
       });
     }
 
-    // Create order with pending status.
     const orderResult = await client.query(
       `
       INSERT INTO orders (user_id, status, total_amount)
@@ -222,7 +215,6 @@ app.post("/orders", async (req, res, next) => {
 
     const order = orderResult.rows[0];
 
-    // Save order items and decrement product stock.
     for (const item of orderItems) {
       await client.query(
         `
@@ -253,7 +245,6 @@ app.post("/orders", async (req, res, next) => {
       createdAt: order.created_at,
     };
 
-    // Publish after DB commit so RabbitMQ does not receive uncommitted data.
     await publishOrderCreated(event);
 
     log("info", "order_created", {
@@ -275,7 +266,6 @@ app.post("/orders", async (req, res, next) => {
   }
 });
 
-// List all orders.
 app.get("/orders", async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -300,7 +290,6 @@ app.get("/orders", async (req, res, next) => {
   }
 });
 
-// Get one order with its items.
 app.get("/orders/:id", async (req, res, next) => {
   try {
     const orderResult = await pool.query(
@@ -351,7 +340,6 @@ app.get("/orders/:id", async (req, res, next) => {
   }
 });
 
-// Central error handler.
 app.use((err, req, res, next) => {
   log("error", "request_failed", {
     requestId: req.requestId,
@@ -372,7 +360,10 @@ async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 
@@ -385,9 +376,7 @@ async function shutdown() {
   log("info", "service_shutting_down");
 
   try {
-    if (rabbitChannel) {
-      await rabbitChannel.close();
-    }
+    if (rabbitChannel) await rabbitChannel.close();
   } catch (err) {
     log("warn", "rabbitmq_channel_shutdown_failed", {
       error: err.message || String(err),
@@ -395,9 +384,7 @@ async function shutdown() {
   }
 
   try {
-    if (rabbitConnection) {
-      await rabbitConnection.close();
-    }
+    if (rabbitConnection) await rabbitConnection.close();
   } catch (err) {
     log("warn", "rabbitmq_connection_shutdown_failed", {
       error: err.message || String(err),

@@ -1,17 +1,20 @@
+import { Link } from "react-router-dom";
 import "./Header.css";
 
 export default function Header({ cartCount }) {
   return (
     <header className="header">
-      <div>
+      <Link to="/" className="brand">
         <h1>RootsMarket</h1>
         <p>Traditional food products, delivered fresh.</p>
-      </div>
+      </Link>
 
       <nav>
-        <a href="/">Store</a>
-        <a href="/admin">Admin</a>
-        <button className="cart-button">Cart ({cartCount})</button>
+        <Link to="/store">Store</Link>
+        <Link to="/admin">Admin</Link>
+        <Link to="/store" className="cart-button">
+          Cart ({cartCount})
+        </Link>
       </nav>
     </header>
   );

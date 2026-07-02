@@ -1,0 +1,52 @@
+.admin-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: #f8faf7;
+}
+
+.admin-sidebar {
+  background: #052e16;
+  color: white;
+  padding: 28px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-logo {
+  color: #86efac;
+  font-size: 26px;
+  font-weight: 900;
+  text-decoration: none;
+  margin-bottom: 34px;
+}
+
+.admin-nav {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-nav a {
+  color: #d1fae5;
+  text-decoration: none;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.admin-nav a.active,
+.admin-nav a:hover {
+  background: #16a34a;
+  color: white;
+}
+
+.store-link {
+  margin-top: auto;
+  color: #bbf7d0;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.admin-main {
+  padding: 34px;
+}
