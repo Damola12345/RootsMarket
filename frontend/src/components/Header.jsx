@@ -10,8 +10,9 @@ export default function Header({ cartCount }) {
       </Link>
 
       <nav>
+        <Link to="/">Home</Link>
         <Link to="/store">Store</Link>
-        <Link to="/admin">Admin</Link>
+        <Link to="/my-orders">My Orders</Link>
         <Link to="/store" className="cart-button">
           Cart ({cartCount})
         </Link>
