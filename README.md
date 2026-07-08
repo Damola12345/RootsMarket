@@ -71,4 +71,4 @@ docker compose down
 |-----------|-----|
 | Customer Store | http://localhost:3000 |
 | RabbitMQ Management | http://localhost:15672 |
-
+| Health Endpoints | http://localhost:3001/health – http://localhost:3005/health
