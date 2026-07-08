@@ -4,6 +4,16 @@ const express = require("express");
 const cors = require("cors");
 const amqp = require("amqplib");
 
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  notificationsSentTotal,
+  notificationsFailedTotal,
+  rabbitmqMessagesConsumedTotal,
+} = require("./metrics");
+
 const app = express();
 
 const SERVICE_NAME = "notification-service";
@@ -17,6 +27,31 @@ const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({ status: res.statusCode });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
+// Structured JSON logger.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -44,8 +79,14 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Process payment.completed messages from RabbitMQ.
 async function processPaymentCompleted(message) {
   const raw = message.content.toString();
+
+  // Record RabbitMQ message consumption.
+  rabbitmqMessagesConsumedTotal.inc({
+    queue: PAYMENT_COMPLETED_QUEUE,
+  });
 
   try {
     const event = JSON.parse(raw);
@@ -58,6 +99,7 @@ async function processPaymentCompleted(message) {
       status: event.status,
     });
 
+    // MVP notification action: write a structured log.
     log("info", "notification_sent", {
       type: "payment_confirmation",
       orderId: event.orderId,
@@ -65,8 +107,14 @@ async function processPaymentCompleted(message) {
       message: `Notification sent for order ${event.orderId}`,
     });
 
+    // Record successful notification.
+    notificationsSentTotal.inc();
+
     rabbitChannel.ack(message);
   } catch (err) {
+    // Record failed notification handling.
+    notificationsFailedTotal.inc();
+
     log("error", "notification_processing_failed", {
       error: err.message || String(err),
       rawMessage: raw,
@@ -76,6 +124,7 @@ async function processPaymentCompleted(message) {
   }
 }
 
+// Connect to RabbitMQ and consume payment.completed events.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
@@ -94,6 +143,12 @@ async function connectRabbitMQ() {
     consuming: PAYMENT_COMPLETED_QUEUE,
   });
 }
+
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
 
 async function start() {
   await connectRabbitMQ();

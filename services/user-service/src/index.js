@@ -6,6 +6,14 @@ const { Pool } = require("pg");
 const { createClient } = require("redis");
 const crypto = require("crypto");
 
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  usersCreatedTotal,
+} = require("./metrics");
+
 const app = express();
 
 const SERVICE_NAME = "user-service";
@@ -13,15 +21,39 @@ const PORT = process.env.PORT || 3001;
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-// Allow frontend requests from Vite during development.
 app.use(
   cors({
     origin: CORS_ORIGIN,
   })
 );
 
-// Parse incoming JSON request bodies.
 app.use(express.json());
+
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({
+      status: res.statusCode,
+    });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
 
 function log(level, message, meta = {}) {
   console.log(
@@ -165,6 +197,8 @@ app.post("/users", async (req, res, next) => {
 
     await deleteCache(["users:all"]);
 
+    usersCreatedTotal.inc();
+
     log("info", "user_created", {
       requestId: req.requestId,
       userId: result.rows[0].id,
@@ -259,6 +293,12 @@ app.get("/users/:id", async (req, res, next) => {
   }
 });
 
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
+
 app.use((err, req, res, next) => {
   log("error", "request_failed", {
     requestId: req.requestId,
@@ -286,7 +326,10 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT, corsOrigin: CORS_ORIGIN });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 

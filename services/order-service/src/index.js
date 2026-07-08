@@ -6,6 +6,16 @@ const { Pool } = require("pg");
 const amqp = require("amqplib");
 const crypto = require("crypto");
 
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  ordersCreatedTotal,
+  ordersFailedTotal,
+  rabbitmqMessagesPublishedTotal,
+} = require("./metrics");
+
 const app = express();
 
 const SERVICE_NAME = "order-service";
@@ -24,6 +34,32 @@ app.use(
 
 app.use(express.json());
 
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({
+      status: res.statusCode,
+    });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -36,6 +72,7 @@ function log(level, message, meta = {}) {
   );
 }
 
+// Add request ID to every request for traceability.
 app.use((req, res, next) => {
   req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
   res.setHeader("x-request-id", req.requestId);
@@ -88,6 +125,11 @@ async function publishOrderCreated(event) {
     }
   );
 
+  // Record successful RabbitMQ publish.
+  rabbitmqMessagesPublishedTotal.inc({
+    queue: ORDER_CREATED_QUEUE,
+  });
+
   log("info", "order_created_event_published", {
     orderId: event.orderId,
     userId: event.userId,
@@ -130,6 +172,8 @@ app.post("/orders", async (req, res, next) => {
     const { userId, items } = req.body;
 
     if (!userId || !Array.isArray(items) || items.length === 0) {
+      ordersFailedTotal.inc();
+
       return res.status(400).json({
         error: "userId and at least one order item are required",
       });
@@ -137,6 +181,8 @@ app.post("/orders", async (req, res, next) => {
 
     for (const item of items) {
       if (!item.productId || !item.quantity || Number(item.quantity) <= 0) {
+        ordersFailedTotal.inc();
+
         return res.status(400).json({
           error: "each item requires productId and quantity greater than 0",
         });
@@ -156,6 +202,8 @@ app.post("/orders", async (req, res, next) => {
 
     if (userResult.rows.length === 0) {
       await client.query("ROLLBACK");
+      ordersFailedTotal.inc();
+
       return res.status(404).json({
         error: "user not found",
       });
@@ -177,6 +225,8 @@ app.post("/orders", async (req, res, next) => {
 
       if (productResult.rows.length === 0) {
         await client.query("ROLLBACK");
+        ordersFailedTotal.inc();
+
         return res.status(404).json({
           error: `product not found: ${item.productId}`,
         });
@@ -187,6 +237,8 @@ app.post("/orders", async (req, res, next) => {
 
       if (product.stock < quantity) {
         await client.query("ROLLBACK");
+        ordersFailedTotal.inc();
+
         return res.status(409).json({
           error: `insufficient stock for product: ${product.name}`,
         });
@@ -247,6 +299,9 @@ app.post("/orders", async (req, res, next) => {
 
     await publishOrderCreated(event);
 
+    // Record successful order creation.
+    ordersCreatedTotal.inc();
+
     log("info", "order_created", {
       requestId: req.requestId,
       orderId: order.id,
@@ -260,6 +315,10 @@ app.post("/orders", async (req, res, next) => {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+
+    // Record failed order creation.
+    ordersFailedTotal.inc();
+
     next(err);
   } finally {
     client.release();
@@ -338,6 +397,12 @@ app.get("/orders/:id", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
 });
 
 app.use((err, req, res, next) => {

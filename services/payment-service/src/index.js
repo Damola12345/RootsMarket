@@ -5,6 +5,17 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const amqp = require("amqplib");
 
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  paymentsProcessedTotal,
+  paymentsFailedTotal,
+  rabbitmqMessagesConsumedTotal,
+  rabbitmqMessagesPublishedTotal,
+} = require("./metrics");
+
 const app = express();
 
 const SERVICE_NAME = "payment-service";
@@ -19,6 +30,31 @@ const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({ status: res.statusCode });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
+// Structured JSON logger.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -136,6 +172,11 @@ async function publishPaymentCompleted(event) {
     }
   );
 
+  // Record RabbitMQ publish metric.
+  rabbitmqMessagesPublishedTotal.inc({
+    queue: PAYMENT_COMPLETED_QUEUE,
+  });
+
   log("info", "payment_completed_event_published", {
     orderId: event.orderId,
     paymentId: event.paymentId,
@@ -146,6 +187,12 @@ async function publishPaymentCompleted(event) {
 async function processOrderCreated(message) {
   const raw = message.content.toString();
   const event = JSON.parse(raw);
+
+  // Record RabbitMQ message consumption.
+  rabbitmqMessagesConsumedTotal.inc({
+    queue: ORDER_CREATED_QUEUE,
+  });
+
   const client = await pool.connect();
 
   try {
@@ -211,6 +258,9 @@ async function processOrderCreated(message) {
       createdAt: payment.created_at,
     });
 
+    // Record successful payment processing.
+    paymentsProcessedTotal.inc();
+
     rabbitChannel.ack(message);
 
     log("info", "payment_processed", {
@@ -220,6 +270,9 @@ async function processOrderCreated(message) {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+
+    // Record failed payment processing.
+    paymentsFailedTotal.inc();
 
     log("error", "payment_processing_failed", {
       error: err.message,
@@ -250,6 +303,12 @@ async function connectRabbitMQ() {
     publishing: PAYMENT_COMPLETED_QUEUE,
   });
 }
+
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
 
 app.use((err, req, res, next) => {
   log("error", "request_failed", {
