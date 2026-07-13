@@ -1,0 +1,18 @@
+# Automatically provision Prometheus as Grafana's default data source.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: rootsmarket-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+
+    # Make Prometheus the default data source.
+    isDefault: true
+
+    editable: false
+
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
