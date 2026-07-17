@@ -1,3 +1,16 @@
+# Shared metadata added to containers.
+x-default-labels: &default-labels
+  com.rootsmarket.project: rootsmarket
+  com.rootsmarket.environment: development
+  com.rootsmarket.managed-by: docker-compose
+
+# Prevent container logs from growing without limits.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 # Shared environment variables reused by all services
 x-common-env: &common-env
   NODE_ENV: development
@@ -20,7 +33,7 @@ services:
     environment:
       POSTGRES_DB: 
       POSTGRES_USER: 
-      POSTGRES_PASSWORD: 
+      POSTGRES_PASSWORD:
     ports:
       - "5432:5432"
     volumes:
@@ -61,10 +74,19 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+      # RabbitMQ Prometheus metrics endpoint.
+      - "15692:15692"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # Enable management UI and Prometheus plugins.
+      - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     networks:
       - rootsmarket-net
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: rabbitmq
+      com.rootsmarket.component: messaging
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -212,6 +234,288 @@ services:
     networks:
       - rootsmarket-net
 
+  # Prometheus metrics server
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    container_name: rootsmarket-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+      - "--log.level=info"
+    ports:
+      - "9090:9090"
+    volumes:
+      # Main Prometheus configuration.
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Recording and alerting rules.
+      - ./infra/observability/prometheus/rules:/etc/prometheus/rules:ro
+      # Persist time-series data across restarts.
+      - prometheus_data:/prometheus
+
+    depends_on:
+      user-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: prometheus
+      com.rootsmarket.component: observability
+    logging: *default-logging
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://localhost:9090/-/healthy"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Grafana dashboards and visualization
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    container_name: rootsmarket-grafana
+    restart: unless-stopped
+    ports:
+      - "3006:3000"
+    environment:
+      # Demo credentials. Use secrets in a real deployment.
+      GF_SECURITY_ADMIN_USER: 
+      GF_SECURITY_ADMIN_PASSWORD:
+
+      # Prevent public account creation.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+      # Disable anonymous dashboard access.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+
+      # Keep provisioning predictable.
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+
+      # Reduce unnecessary telemetry in the learning environment.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+
+      # Log to stdout so Docker/Alloy can collect it later.
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: info
+
+    volumes:
+      # Persist Grafana users, settings, and local metadata.
+      - grafana_data:/var/lib/grafana
+      # Automatically provision data sources and dashboard providers.
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Automatically load RootsMarket dashboards.
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: grafana
+      com.rootsmarket.component: observability
+    logging: *default-logging
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:3000/api/health || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Loki - centralized log storage
+  loki:
+    image: grafana/loki:${LOKI_VERSION}
+    container_name: rootsmarket-loki
+    restart: unless-stopped
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+    ports:
+      # Exposed locally for health checks and debugging.
+      - "3100:3100"
+    volumes:
+      # Loki configuration.
+      - ./infra/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      # Persist logs across normal docker compose restarts.
+      - loki-data:/loki
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: loki
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # Grafana Alloy - Docker log collection
+  alloy:
+    image: grafana/alloy:${ALLOY_VERSION}
+    container_name: rootsmarket-alloy
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    ports:
+      # Alloy diagnostics UI.
+      - "12345:12345"
+    volumes:
+      # Alloy pipeline configuration.
+      - ./infra/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read Docker container metadata and logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persist log-reading positions
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: alloy
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # PostgreSQL Prometheus exporter
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:${POSTGRES_EXPORTER_VERSION}
+    container_name: rootsmarket-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: >-
+        postgresql://rootsmarket:rootsmarket@postgres:5432/rootsmarket?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: postgres-exporter
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # Redis Prometheus exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:${REDIS_EXPORTER_VERSION}
+    container_name: rootsmarket-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 128m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: redis-exporter
+      com.rootsmarket.component: observability
+
+    logging: *default-logging
+
+  # Docker host operating-system metrics
+  node-exporter:
+    image: prom/node-exporter:${NODE_EXPORTER_VERSION}
+    container_name: rootsmarket-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 128m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: node-exporter
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # cAdvisor - per-container resource metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:${CADVISOR_VERSION}
+    container_name: rootsmarket-cadvisor
+    restart: unless-stopped
+    # cAdvisor needs access to Docker and host cgroup data.
+    privileged: true
+    ports:
+      - "8080:8080"
+    command:
+      # Collect metrics every 15 seconds.
+      - "--housekeeping_interval=15s"
+      # Preserve Docker and Compose labels.
+      - "--store_container_labels=true"
+      # Keep disabled collectors minimal for local use.
+      - "--disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory"
+    volumes:
+      # Host filesystem and kernel information.
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/run:/var/run:ro
+
+      # Explicit Docker socket access.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # Docker storage metadata.
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: cadvisor
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
 networks:
   rootsmarket-net:
     driver: bridge
@@ -219,3 +523,7 @@ networks:
 volumes:
   pgdata:
   rabbitmq_data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alloy-data:
