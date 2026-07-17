@@ -1,0 +1,49 @@
+# Loki runs as a single local instance for the Docker Compose environment.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  # Store Loki data on the mounted persistent volume.
+  path_prefix: /loki
+
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+  replication_factor: 1
+
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+
+      index:
+        prefix: rootsmarket_index_
+        period: 24h
+
+limits_config:
+  # Reject extremely old log entries accidentally submitted by clients.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+  # Keep logs for seven days in the local environment.
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

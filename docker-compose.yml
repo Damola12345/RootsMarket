@@ -1,26 +1,45 @@
-# Shared environment variables reused by all services
+# Shared environment variables for Node.js services.
 x-common-env: &common-env
-  NODE_ENV: development
+  NODE_ENV: ${NODE_ENV}
+
   POSTGRES_HOST: postgres
   POSTGRES_PORT: 5432
-  POSTGRES_DB: 
-  POSTGRES_USER: 
-  POSTGRES_PASSWORD: 
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
   REDIS_URL: redis://redis:6379
-  CACHE_TTL_SECONDS: 60
-  RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672
-  CORS_ORIGIN: http://localhost:3000
+  CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+
+  # Dockerized frontend is available on port 3000.
+  CORS_ORIGIN: ${CORS_ORIGIN}
+
+# Shared labels used by Docker discovery, Alloy, cAdvisor, and general service id
+x-default-labels: &default-labels
+  com.rootsmarket.project: rootsmarket
+  com.rootsmarket.environment: ${NODE_ENV:-development}
+  com.rootsmarket.managed-by: docker-compose
+
+# Shared Docker log rotation configuration
+# Alloy reads these logs through the Docker socket
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 
 services:
-  # PostgreSQL Database
+  # DATA LAYER
   postgres:
-    image: postgres:16
+    image: postgres:${POSTGRES_VERSION}
     container_name: rootsmarket-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: 
-      POSTGRES_USER: 
-      POSTGRES_PASSWORD: 
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -30,14 +49,21 @@ services:
     networks:
       - rootsmarket-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rootsmarket"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # Redis Cache
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: postgres
+      com.rootsmarket.component: database
+    logging: *default-logging
   redis:
-    image: redis:7-alpine
+    image: redis:${REDIS_VERSION}
     container_name: rootsmarket-redis
     restart: unless-stopped
     ports:
@@ -50,19 +76,31 @@ services:
       timeout: 5s
       retries: 5
 
-  # RabbitMQ Message Broker
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: redis
+      com.rootsmarket.component: cache
+
+    logging: *default-logging
+
+
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:${RABBITMQ_VERSION}
     container_name: rootsmarket-rabbitmq
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: 
-      RABBITMQ_DEFAULT_PASS: 
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
+      # AMQP
       - "5672:5672"
+      # RabbitMQ management UI
       - "15672:15672"
+      # RabbitMQ Prometheus endpoint
+      - "15692:15692"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     networks:
       - rootsmarket-net
     healthcheck:
@@ -71,151 +109,421 @@ services:
       timeout: 5s
       retries: 5
 
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: rabbitmq
+      com.rootsmarket.component: messaging
+
+    logging: *default-logging
+
+  # NODE.JS MICROSERVICES
   user-service:
     build:
       context: ./services/user-service
+
     container_name: rootsmarket-user-service
     restart: unless-stopped
+
     ports:
       - "3001:3001"
+
     environment:
       <<: *common-env
       PORT: 3001
+      SERVICE_NAME: user-service
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     networks:
       - rootsmarket-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: user-service
+      com.rootsmarket.component: backend
+
+    logging: *default-logging
+
 
   product-service:
     build:
       context: ./services/product-service
+
     container_name: rootsmarket-product-service
     restart: unless-stopped
+
     ports:
       - "3002:3002"
+
     environment:
       <<: *common-env
       PORT: 3002
+      SERVICE_NAME: product-service
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     networks:
       - rootsmarket-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: product-service
+      com.rootsmarket.component: backend
+
+    logging: *default-logging
+
 
   order-service:
     build:
       context: ./services/order-service
+
     container_name: rootsmarket-order-service
     restart: unless-stopped
+
     ports:
       - "3003:3003"
+
     environment:
       <<: *common-env
       PORT: 3003
+      SERVICE_NAME: order-service
+
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
     networks:
       - rootsmarket-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3003/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: order-service
+      com.rootsmarket.component: backend
+
+    logging: *default-logging
+
 
   payment-service:
     build:
       context: ./services/payment-service
+
     container_name: rootsmarket-payment-service
     restart: unless-stopped
+
     ports:
       - "3004:3004"
+
     environment:
       <<: *common-env
       PORT: 3004
+      SERVICE_NAME: payment-service
+
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
     networks:
       - rootsmarket-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: payment-service
+      com.rootsmarket.component: backend
+
+    logging: *default-logging
+
 
   notification-service:
     build:
       context: ./services/notification-service
+
     container_name: rootsmarket-notification-service
     restart: unless-stopped
+
     ports:
       - "3005:3005"
+
     environment:
       <<: *common-env
       PORT: 3005
+      SERVICE_NAME: notification-service
+
     depends_on:
       rabbitmq:
         condition: service_healthy
+
     networks:
       - rootsmarket-net
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
- # React Frontend served by Nginx
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: notification-service
+      com.rootsmarket.component: backend
+
+    logging: *default-logging
+
+  # FRONTEND
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_USER_SERVICE_URL: http://localhost:3001
-        VITE_PRODUCT_SERVICE_URL: http://localhost:3002
-        VITE_ORDER_SERVICE_URL: http://localhost:3003
-        VITE_PAYMENT_SERVICE_URL: http://localhost:3004
-        VITE_NOTIFICATION_SERVICE_URL: http://localhost:3005
     container_name: rootsmarket-frontend
     restart: unless-stopped
     ports:
       - "3000:80"
     depends_on:
-      user-service:
-        condition: service_healthy
-      product-service:
-        condition: service_healthy
-      order-service:
-        condition: service_healthy
-      payment-service:
-        condition: service_healthy
-      notification-service:
-        condition: service_healthy
+      - user-service
+      - product-service
+      - order-service
+      - payment-service
+      - notification-service
     networks:
       - rootsmarket-net
 
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: frontend
+      com.rootsmarket.component: frontend
+
+    logging: *default-logging
+
+  # EXPORTERS
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:${POSTGRES_EXPORTER_VERSION}
+    container_name: rootsmarket-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: >-
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: postgres-exporter
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+
+  redis-exporter:
+    image: oliver006/redis_exporter:${REDIS_EXPORTER_VERSION}
+    container_name: rootsmarket-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 128m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: redis-exporter
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+
+  node-exporter:
+    image: prom/node-exporter:${NODE_EXPORTER_VERSION}
+    container_name: rootsmarket-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 128m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: node-exporter
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:${CADVISOR_VERSION}
+    container_name: rootsmarket-cadvisor
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "8080:8080"
+    command:
+      - "--housekeeping_interval=15s"
+      - "--store_container_labels=true"
+      - "--disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory"
+    volumes:
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/run:/var/run:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: cadvisor
+      com.rootsmarket.component: observability
+
+    logging: *default-logging
+
+
+  # METRICS
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    container_name: rootsmarket-prometheus
+    restart: unless-stopped
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+      - "--web.external-url=http://localhost:9090"
+      - "--log.level=info"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: prometheus
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # LOG STORAGE
+  loki:
+    image: grafana/loki:${LOKI_VERSION}
+    container_name: rootsmarket-loki
+    restart: unless-stopped
+    command:
+      - "-config.file=/etc/loki/loki-config.yml"
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: loki
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+
+  # LOG COLLECTION
+  alloy:
+    image: grafana/alloy:${ALLOY_VERSION}
+    container_name: rootsmarket-alloy
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./infra/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    networks:
+      - rootsmarket-net
+    cpus: 0.25
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: alloy
+      com.rootsmarket.component: observability
+    logging: *default-logging
+
+  # VISUALIZATION
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-12.2.10}
+    container_name: rootsmarket-grafana
+    restart: unless-stopped
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3006:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # Automatically provision Prometheus and Loki.
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Automatically provision RootsMarket dashboards.
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - rootsmarket-net
+    cpus: 0.5
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: grafana
+      com.rootsmarket.component: observability
+
+    logging: *default-logging
+
+
+# NETWORK
 networks:
   rootsmarket-net:
+    name: rootsmarket-net
     driver: bridge
 
+
+# PERSISTENT VOLUMES
 volumes:
   pgdata:
   rabbitmq_data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alloy-data:

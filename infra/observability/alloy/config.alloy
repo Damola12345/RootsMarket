@@ -1,0 +1,82 @@
+
+// Alloy internal logging.
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Discover Docker containers through the Docker socket.
+// Only containers carrying the RootsMarket project label are selected
+discovery.docker "rootsmarket" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+
+  filter {
+    name   = "label"
+    values = ["com.rootsmarket.project=rootsmarket"]
+  }
+}
+
+
+// Convert Docker metadata into useful Loki labels
+// Compose automatically supplies its project and service
+// labels, while RootsMarket supplies application labels
+
+discovery.relabel "rootsmarket" {
+  targets = discovery.docker.rootsmarket.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_component"]
+    target_label  = "component"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_environment"]
+    target_label  = "environment"
+  }
+
+  rule {
+    target_label = "application"
+    replacement  = "rootsmarket"
+  }
+}
+
+
+// Read stdout and stderr from discovered containers
+// The original structured JSON log line is preserved
+// In Grafana, use `| json` to parse Node.js logs
+
+loki.source.docker "rootsmarket" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.rootsmarket.output
+  forward_to       = [loki.write.rootsmarket.receiver]
+  refresh_interval = "5s"
+}
+
+// Send collected logs to Loki
+loki.write "rootsmarket" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    application = "rootsmarket",
+  }
+}

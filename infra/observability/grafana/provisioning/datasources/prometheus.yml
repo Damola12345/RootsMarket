@@ -16,3 +16,15 @@ datasources:
     jsonData:
       timeInterval: 15s
       httpMethod: POST
+
+  - name: Loki
+    uid: rootsmarket-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: false
+    editable: false
+
+    jsonData:
+      timeout: 60
+      maxLines: 1000
