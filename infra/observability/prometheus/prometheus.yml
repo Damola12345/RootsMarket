@@ -1,0 +1,158 @@
+
+global:
+  # Collect metrics from each target every 15 seconds.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  # Evaluate alerting rules every 15 seconds.
+  evaluation_interval: 15s
+
+  # Labels automatically attached to collected series.
+  external_labels:
+    application: rootsmarket
+    environment: development
+
+# Load recording and alerting rules.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus monitors itself.
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - prometheus:9090
+        labels:
+          service: prometheus
+          component: observability
+          application: rootsmarket
+          environment: development
+
+  # User service metrics.
+  - job_name: user-service
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - user-service:3001
+        labels:
+          service: user-service
+          component: backend
+          application: rootsmarket
+          environment: development
+
+  # Product service metrics.
+  - job_name: product-service
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - product-service:3002
+        labels:
+          service: product-service
+          component: backend
+          application: rootsmarket
+          environment: development
+
+  # Order service metrics.
+  - job_name: order-service
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - order-service:3003
+        labels:
+          service: order-service
+          component: backend
+          application: rootsmarket
+          environment: development
+
+  # Payment service metrics.
+  - job_name: payment-service
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - payment-service:3004
+        labels:
+          service: payment-service
+          component: backend
+          application: rootsmarket
+          environment: development
+
+  # Notification service metrics.
+  - job_name: notification-service
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - notification-service:3005
+        labels:
+          service: notification-service
+          component: backend
+          application: rootsmarket
+          environment: development
+
+    # PostgreSQL exporter metrics.
+  - job_name: postgres-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - postgres-exporter:9187
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: postgres
+          component: database
+
+  # Redis exporter metrics.
+  - job_name: redis-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - redis-exporter:9121
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: redis
+          component: cache
+
+  # RabbitMQ built-in Prometheus endpoint.
+  - job_name: rabbitmq
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - rabbitmq:15692
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: rabbitmq
+          component: messaging
+
+  # Docker Desktop Linux VM or Linux host metrics.
+  - job_name: node-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - node-exporter:9100
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: docker-host
+          component: infrastructure
+
+    # Per-container resource metrics from cAdvisor.
+  - job_name: cadvisor
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - cadvisor:8080
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: cadvisor
+          component: container-monitoring

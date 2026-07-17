@@ -1,0 +1,166 @@
+.admin-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 26px;
+}
+
+.admin-page-header h1 {
+  margin: 0;
+  color: #111827;
+}
+
+.admin-page-header p {
+  margin: 6px 0 0;
+  color: #6b7280;
+}
+
+.date-pill {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: #374151;
+  font-weight: 700;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: white;
+  border-radius: 20px;
+  padding: 22px;
+  box-shadow: 0 12px 35px rgba(15, 23, 42, 0.06);
+}
+
+.stat-card p {
+  margin: 0;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.stat-card h2 {
+  margin: 10px 0;
+  font-size: 32px;
+  color: #111827;
+}
+
+.stat-card span {
+  color: #16a34a;
+  font-weight: 800;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.9fr;
+  gap: 22px;
+}
+
+.admin-panel {
+  background: white;
+  border-radius: 22px;
+  padding: 24px;
+  box-shadow: 0 12px 35px rgba(15, 23, 42, 0.06);
+}
+
+.admin-panel h2 {
+  margin: 0 0 18px;
+}
+
+.fake-line-chart {
+  height: 220px;
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  padding: 20px;
+  border-radius: 18px;
+  background: linear-gradient(#f8fafc, #ecfdf5);
+}
+
+.fake-line-chart div {
+  flex: 1;
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(#2563eb, #93c5fd);
+}
+
+.chart-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.status-chart {
+  display: grid;
+  place-items: center;
+  gap: 20px;
+}
+
+.donut {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: conic-gradient(#22c55e 0 80%, #f59e0b 80% 93%, #ef4444 93% 100%);
+  position: relative;
+}
+
+.donut::after {
+  content: "";
+  position: absolute;
+  inset: 34px;
+  background: white;
+  border-radius: 50%;
+}
+
+.status-list p {
+  margin: 10px 0;
+  font-weight: 700;
+}
+
+.green-dot,
+.yellow-dot,
+.red-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-right: 8px;
+}
+
+.green-dot {
+  background: #22c55e;
+}
+
+.yellow-dot {
+  background: #f59e0b;
+}
+
+.red-dot {
+  background: #ef4444;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.paid-badge {
+  background: #dcfce7;
+  color: #166534;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 800;
+}

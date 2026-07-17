@@ -1,20 +1,59 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
 const crypto = require("crypto");
+
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  productsRequestedTotal,
+  cacheHitsTotal,
+  cacheMissesTotal,
+} = require("./metrics");
 
 const app = express();
 
 const SERVICE_NAME = "product-service";
 const PORT = process.env.PORT || 3002;
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-// Parse incoming JSON request bodies
+// Allow frontend requests.
+app.use(cors({ origin: CORS_ORIGIN }));
+
+// Parse incoming JSON request bodies.
 app.use(express.json());
 
-// Structured logger for clean service logs.
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({ status: res.statusCode });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
+// Structured JSON logger for Loki/Grafana later.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -27,11 +66,9 @@ function log(level, message, meta = {}) {
   );
 }
 
-// Add request ID to every request.
-// Useful later for tracing distributed requests.
+// Add request ID to every request for tracing/debugging.
 app.use((req, res, next) => {
   req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
-
   res.setHeader("x-request-id", req.requestId);
 
   log("info", "request_received", {
@@ -43,8 +80,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// PostgreSQL connection pool.
-// Product data is stored permanently in Postgres.
+// PostgreSQL stores product data permanently.
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: Number(process.env.POSTGRES_PORT || 5432),
@@ -54,8 +90,7 @@ const pool = new Pool({
   max: Number(process.env.POSTGRES_POOL_MAX || 10),
 });
 
-// Redis client.
-// Product list is cached here for faster reads.
+// Redis caches product reads.
 const redisClient = createClient({
   url: process.env.REDIS_URL || "redis://localhost:6379",
 });
@@ -66,8 +101,7 @@ redisClient.on("error", (err) => {
   });
 });
 
-// Read from Redis cache.
-// If Redis fails, continue without cache.
+// Read from Redis cache. If Redis fails, continue with Postgres.
 async function getCache(key) {
   if (!redisClient.isOpen) return null;
 
@@ -84,7 +118,7 @@ async function getCache(key) {
   }
 }
 
-// Write response data to Redis cache.
+// Write data to Redis cache with TTL.
 async function setCache(key, value, ttl = CACHE_TTL_SECONDS) {
   if (!redisClient.isOpen) return;
 
@@ -98,7 +132,7 @@ async function setCache(key, value, ttl = CACHE_TTL_SECONDS) {
   }
 }
 
-// Delete stale cache after product changes.
+// Remove stale cache after product changes.
 async function deleteCache(keys) {
   if (!redisClient.isOpen) return;
 
@@ -114,7 +148,7 @@ async function deleteCache(keys) {
   }
 }
 
-// Health endpoint checks Postgres and Redis.
+// Health endpoint for Docker/Kubernetes checks.
 app.get("/health", async (req, res) => {
   const health = {
     status: "healthy",
@@ -128,7 +162,7 @@ app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     health.dependencies.postgres = "healthy";
-  } catch (err) {
+  } catch {
     health.status = "unhealthy";
     health.dependencies.postgres = "unhealthy";
   }
@@ -140,22 +174,24 @@ app.get("/health", async (req, res) => {
     } else {
       health.dependencies.redis = "not_connected";
     }
-  } catch (err) {
+  } catch {
     health.dependencies.redis = "unhealthy";
   }
 
-  const statusCode = health.status === "healthy" ? 200 : 503;
-  res.status(statusCode).json(health);
+  res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// List all products.
-// Uses cache-aside pattern: Redis → Postgres → Redis.
+// List products using cache-aside pattern: Redis → Postgres → Redis.
 app.get("/products", async (req, res, next) => {
   try {
+    productsRequestedTotal.inc();
+
     const cacheKey = "products:all";
     const cached = await getCache(cacheKey);
 
     if (cached) {
+      cacheHitsTotal.inc({ cache_key: cacheKey });
+
       log("info", "cache_hit", {
         requestId: req.requestId,
         key: cacheKey,
@@ -163,6 +199,8 @@ app.get("/products", async (req, res, next) => {
 
       return res.json(cached);
     }
+
+    cacheMissesTotal.inc({ cache_key: cacheKey });
 
     log("info", "cache_miss", {
       requestId: req.requestId,
@@ -211,7 +249,6 @@ app.post("/products", async (req, res, next) => {
       [name, price, stock]
     );
 
-    // Product list changed, so remove cached product list.
     await deleteCache(["products:all"]);
 
     log("info", "product_created", {
@@ -267,7 +304,6 @@ app.put("/products/:id", async (req, res, next) => {
       });
     }
 
-    // Product changed, so invalidate product cache.
     await deleteCache(["products:all"]);
 
     log("info", "product_updated", {
@@ -279,6 +315,12 @@ app.put("/products/:id", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
 });
 
 // Central error handler.
@@ -295,8 +337,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start service.
-// Postgres is required. Redis is optional cache.
+// Start service. Postgres is required; Redis is optional cache.
 async function start() {
   await pool.query("SELECT 1");
   log("info", "postgres_connected");
@@ -311,11 +352,14 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 
-// Prevent duplicate shutdown when CTRL+C is pressed.
+// Graceful shutdown.
 let isShuttingDown = false;
 
 async function shutdown() {

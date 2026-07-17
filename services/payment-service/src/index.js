@@ -1,22 +1,60 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const { Pool } = require("pg");
 const amqp = require("amqplib");
+
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  paymentsProcessedTotal,
+  paymentsFailedTotal,
+  rabbitmqMessagesConsumedTotal,
+  rabbitmqMessagesPublishedTotal,
+} = require("./metrics");
 
 const app = express();
 
 const SERVICE_NAME = "payment-service";
 const PORT = process.env.PORT || 3004;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const RABBITMQ_URL =
   process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
 
 const ORDER_CREATED_QUEUE = "order.created";
 const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
-// Structured JSON logger for readable service logs.
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({ status: res.statusCode });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
+// Structured JSON logger.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -29,7 +67,6 @@ function log(level, message, meta = {}) {
   );
 }
 
-// PostgreSQL connection pool.
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: Number(process.env.POSTGRES_PORT || 5432),
@@ -42,7 +79,6 @@ const pool = new Pool({
 let rabbitConnection = null;
 let rabbitChannel = null;
 
-// Health endpoint for Docker/Kubernetes checks.
 app.get("/health", async (req, res) => {
   const health = {
     status: "healthy",
@@ -56,28 +92,89 @@ app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
     health.dependencies.postgres = "healthy";
-  } catch (err) {
+  } catch {
     health.status = "unhealthy";
     health.dependencies.postgres = "unhealthy";
   }
 
-  if (rabbitChannel) {
-    health.dependencies.rabbitmq = "healthy";
-  } else {
-    health.status = "unhealthy";
-    health.dependencies.rabbitmq = "unhealthy";
-  }
+  health.dependencies.rabbitmq = rabbitChannel ? "healthy" : "unhealthy";
+  if (!rabbitChannel) health.status = "unhealthy";
 
   res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
-// Publish payment.completed after payment is processed.
-async function publishPaymentCompleted(event) {
-  const payload = Buffer.from(JSON.stringify(event));
+app.get("/payments", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.order_id,
+        p.status,
+        p.amount,
+        p.created_at,
+        o.user_id,
+        u.name AS customer_name,
+        u.email AS customer_email
+      FROM payments p
+      JOIN orders o ON o.id = p.order_id
+      JOIN users u ON u.id = o.user_id
+      ORDER BY p.created_at DESC
+      `
+    );
 
-  rabbitChannel.sendToQueue(PAYMENT_COMPLETED_QUEUE, payload, {
-    persistent: true,
-    contentType: "application/json",
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/payments/:id", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.order_id,
+        p.status,
+        p.amount,
+        p.created_at,
+        o.user_id,
+        u.name AS customer_name,
+        u.email AS customer_email
+      FROM payments p
+      JOIN orders o ON o.id = p.order_id
+      JOIN users u ON u.id = o.user_id
+      WHERE p.id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "payment not found",
+      });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+async function publishPaymentCompleted(event) {
+  rabbitChannel.sendToQueue(
+    PAYMENT_COMPLETED_QUEUE,
+    Buffer.from(JSON.stringify(event)),
+    {
+      persistent: true,
+      contentType: "application/json",
+    }
+  );
+
+  // Record RabbitMQ publish metric.
+  rabbitmqMessagesPublishedTotal.inc({
+    queue: PAYMENT_COMPLETED_QUEUE,
   });
 
   log("info", "payment_completed_event_published", {
@@ -87,10 +184,14 @@ async function publishPaymentCompleted(event) {
   });
 }
 
-// Handle order.created messages.
 async function processOrderCreated(message) {
   const raw = message.content.toString();
   const event = JSON.parse(raw);
+
+  // Record RabbitMQ message consumption.
+  rabbitmqMessagesConsumedTotal.inc({
+    queue: ORDER_CREATED_QUEUE,
+  });
 
   const client = await pool.connect();
 
@@ -103,7 +204,6 @@ async function processOrderCreated(message) {
 
     await client.query("BEGIN");
 
-    // Idempotency guard: do not create duplicate payments for same order.
     const existingPayment = await client.query(
       `
       SELECT id, status
@@ -126,7 +226,6 @@ async function processOrderCreated(message) {
       return;
     }
 
-    // Create payment record.
     const paymentResult = await client.query(
       `
       INSERT INTO payments (order_id, status, amount)
@@ -138,7 +237,6 @@ async function processOrderCreated(message) {
 
     const payment = paymentResult.rows[0];
 
-    // Update order status after payment succeeds.
     await client.query(
       `
       UPDATE orders
@@ -160,6 +258,9 @@ async function processOrderCreated(message) {
       createdAt: payment.created_at,
     });
 
+    // Record successful payment processing.
+    paymentsProcessedTotal.inc();
+
     rabbitChannel.ack(message);
 
     log("info", "payment_processed", {
@@ -170,32 +271,27 @@ async function processOrderCreated(message) {
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
 
+    // Record failed payment processing.
+    paymentsFailedTotal.inc();
+
     log("error", "payment_processing_failed", {
       error: err.message,
       rawMessage: raw,
     });
 
-    // Requeue false prevents endless retry loops for bad messages.
     rabbitChannel.nack(message, false, false);
   } finally {
     client.release();
   }
 }
 
-// Connect to RabbitMQ and start consuming order.created.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
-  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, {
-    durable: true,
-  });
+  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, { durable: true });
+  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, { durable: true });
 
-  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, {
-    durable: true,
-  });
-
-  // Process one message at a time for predictable behavior in MVP.
   rabbitChannel.prefetch(1);
 
   await rabbitChannel.consume(ORDER_CREATED_QUEUE, processOrderCreated, {
@@ -208,6 +304,23 @@ async function connectRabbitMQ() {
   });
 }
 
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
+
+app.use((err, req, res, next) => {
+  log("error", "request_failed", {
+    error: err.message,
+    stack: process.env.NODE_ENV === "production" ? undefined : err.stack,
+  });
+
+  res.status(500).json({
+    error: "internal server error",
+  });
+});
+
 async function start() {
   await pool.query("SELECT 1");
   log("info", "postgres_connected");
@@ -215,7 +328,10 @@ async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 
@@ -228,9 +344,7 @@ async function shutdown() {
   log("info", "service_shutting_down");
 
   try {
-    if (rabbitChannel) {
-      await rabbitChannel.close();
-    }
+    if (rabbitChannel) await rabbitChannel.close();
   } catch (err) {
     log("warn", "rabbitmq_channel_shutdown_failed", {
       error: err.message || String(err),
@@ -238,9 +352,7 @@ async function shutdown() {
   }
 
   try {
-    if (rabbitConnection) {
-      await rabbitConnection.close();
-    }
+    if (rabbitConnection) await rabbitConnection.close();
   } catch (err) {
     log("warn", "rabbitmq_connection_shutdown_failed", {
       error: err.message || String(err),

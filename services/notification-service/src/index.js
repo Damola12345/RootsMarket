@@ -1,21 +1,57 @@
 require("dotenv").config();
 
 const express = require("express");
+const cors = require("cors");
 const amqp = require("amqplib");
+
+const {
+  register,
+  httpRequestsTotal,
+  httpRequestDuration,
+  httpRequestsInFlight,
+  notificationsSentTotal,
+  notificationsFailedTotal,
+  rabbitmqMessagesConsumedTotal,
+} = require("./metrics");
 
 const app = express();
 
 const SERVICE_NAME = "notification-service";
 const PORT = process.env.PORT || 3005;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 const RABBITMQ_URL =
   process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
 
 const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
+// Record Prometheus HTTP metrics for every request.
+app.use((req, res, next) => {
+  httpRequestsInFlight.inc();
+
+  const end = httpRequestDuration.startTimer({
+    method: req.method,
+    route: req.path,
+  });
+
+  res.on("finish", () => {
+    end({ status: res.statusCode });
+
+    httpRequestsTotal.inc({
+      method: req.method,
+      route: req.path,
+      status: res.statusCode,
+    });
+
+    httpRequestsInFlight.dec();
+  });
+
+  next();
+});
+
 // Structured JSON logger.
-// Later, Loki/OpenTelemetry/AI assistant can parse these logs easily.
 function log(level, message, meta = {}) {
   console.log(
     JSON.stringify({
@@ -31,7 +67,6 @@ function log(level, message, meta = {}) {
 let rabbitConnection = null;
 let rabbitChannel = null;
 
-// Health endpoint for Docker/Kubernetes checks.
 app.get("/health", (req, res) => {
   const rabbitHealthy = Boolean(rabbitChannel);
 
@@ -44,11 +79,14 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Process payment.completed events.
-// For now, notification means logging to console.
-// Later this can become email, Slack, webhook, SMS, etc.
+// Process payment.completed messages from RabbitMQ.
 async function processPaymentCompleted(message) {
   const raw = message.content.toString();
+
+  // Record RabbitMQ message consumption.
+  rabbitmqMessagesConsumedTotal.inc({
+    queue: PAYMENT_COMPLETED_QUEUE,
+  });
 
   try {
     const event = JSON.parse(raw);
@@ -61,6 +99,7 @@ async function processPaymentCompleted(message) {
       status: event.status,
     });
 
+    // MVP notification action: write a structured log.
     log("info", "notification_sent", {
       type: "payment_confirmation",
       orderId: event.orderId,
@@ -68,14 +107,19 @@ async function processPaymentCompleted(message) {
       message: `Notification sent for order ${event.orderId}`,
     });
 
+    // Record successful notification.
+    notificationsSentTotal.inc();
+
     rabbitChannel.ack(message);
   } catch (err) {
+    // Record failed notification handling.
+    notificationsFailedTotal.inc();
+
     log("error", "notification_processing_failed", {
       error: err.message || String(err),
       rawMessage: raw,
     });
 
-    // Do not requeue malformed messages in MVP.
     rabbitChannel.nack(message, false, false);
   }
 }
@@ -100,11 +144,20 @@ async function connectRabbitMQ() {
   });
 }
 
+// Prometheus scrape endpoint.
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
+
 async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", { port: PORT });
+    log("info", "service_started", {
+      port: PORT,
+      corsOrigin: CORS_ORIGIN,
+    });
   });
 }
 

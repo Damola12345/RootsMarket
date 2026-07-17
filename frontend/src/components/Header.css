@@ -1,0 +1,41 @@
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 40px;
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.brand {
+  text-decoration: none;
+}
+
+.header h1 {
+  margin: 0;
+  color: #166534;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: #6b7280;
+}
+
+.header nav {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.header a {
+  color: #374151;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.cart-button {
+  background: #166534;
+  color: white !important;
+  padding: 12px 18px;
+  border-radius: 12px;
+}

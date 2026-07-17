@@ -1,0 +1,137 @@
+groups:
+  - name: rootsmarket_http_rules
+    interval: 15s
+
+    rules:
+      # Requests per second grouped by service.
+      - record: rootsmarket:http_requests:rate5m
+        expr: |
+          sum by (service) (
+            rate(http_requests_total[5m])
+          )
+
+      # 5xx requests per second.
+      # The "or" expression returns zero when no 5xx series exists.
+      - record: rootsmarket:http_5xx_requests:rate5m
+        expr: |
+          sum by (service) (
+            rate(http_requests_total{status=~"5.."}[5m])
+          )
+          or on (service)
+          (
+            0 *
+            sum by (service) (
+              rate(http_requests_total[5m])
+            )
+          )
+
+      # Ratio of 5xx responses to all HTTP requests.
+      - record: rootsmarket:http_5xx_error_ratio:rate5m
+        expr: |
+          (
+            sum by (service) (
+              rate(http_requests_total{status=~"5.."}[5m])
+            )
+            or on (service)
+            (
+              0 *
+              sum by (service) (
+                rate(http_requests_total[5m])
+              )
+            )
+          )
+          /
+          clamp_min(
+            sum by (service) (
+              rate(http_requests_total[5m])
+            ),
+            0.000001
+          )
+
+      # p95 HTTP latency.
+      - record: rootsmarket:http_request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service, le) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+      # p99 HTTP latency.
+      - record: rootsmarket:http_request_duration_seconds:p99_5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (service, le) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+  # RootsMarket business recording rules
+  - name: rootsmarket_business_rules
+    interval: 15s
+
+    rules:
+      # Rate of successful order creation.
+      - record: rootsmarket:orders_created:rate5m
+        expr: |
+          sum(rate(orders_created_total[5m]))
+
+      # Rate of failed order creation.
+      - record: rootsmarket:orders_failed:rate5m
+        expr: |
+          sum(rate(orders_failed_total[5m]))
+
+      # Rate of successful payment processing.
+      - record: rootsmarket:payments_processed:rate5m
+        expr: |
+          sum(rate(payments_processed_total[5m]))
+
+      # Rate of failed payment processing.
+      - record: rootsmarket:payments_failed:rate5m
+        expr: |
+          sum(rate(payments_failed_total[5m]))
+
+      # Rate of sent notifications.
+      - record: rootsmarket:notifications_sent:rate5m
+        expr: |
+          sum(rate(notifications_sent_total[5m]))
+
+      # RabbitMQ messages published, grouped by service and queue.
+      - record: rootsmarket:rabbitmq_messages_published:rate5m
+        expr: |
+          sum by (service, queue) (
+            rate(rabbitmq_messages_published_total[5m])
+          )
+
+      # RabbitMQ messages consumed, grouped by service and queue.
+      - record: rootsmarket:rabbitmq_messages_consumed:rate5m
+        expr: |
+          sum by (service, queue) (
+            rate(rabbitmq_messages_consumed_total[5m])
+          )
+
+
+  # Redis cache recording rules
+  - name: rootsmarket_cache_rules
+    interval: 15s
+
+    rules:
+      # Cache hit ratio for services exposing cache counters.
+      - record: rootsmarket:cache_hit_ratio:rate5m
+        expr: |
+          sum by (service) (
+            rate(cache_hits_total[5m])
+          )
+          /
+          clamp_min(
+            sum by (service) (
+              rate(cache_hits_total[5m])
+            )
+            +
+            sum by (service) (
+              rate(cache_misses_total[5m])
+            ),
+            0.000001
+          )

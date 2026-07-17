@@ -1,0 +1,52 @@
+groups:
+  # PostgreSQL rules
+  - name: rootsmarket_postgres_rules
+    interval: 15s
+
+    rules:
+      - record: rootsmarket:postgres_transactions:rate5m
+        expr: |
+          sum(
+            rate(pg_stat_database_xact_commit{datname="rootsmarket"}[5m])
+          )
+          +
+          sum(
+            rate(pg_stat_database_xact_rollback{datname="rootsmarket"}[5m])
+          )
+
+      - record: rootsmarket:postgres_cache_hit_ratio:rate5m
+        expr: |
+          sum(
+            rate(pg_stat_database_blks_hit{datname="rootsmarket"}[5m])
+          )
+          /
+          clamp_min(
+            sum(
+              rate(pg_stat_database_blks_hit{datname="rootsmarket"}[5m])
+            )
+            +
+            sum(
+              rate(pg_stat_database_blks_read{datname="rootsmarket"}[5m])
+            ),
+            0.000001
+          )
+
+  # Redis rules
+  - name: rootsmarket_redis_rules
+    interval: 15s
+
+    rules:
+      - record: rootsmarket:redis_commands:rate5m
+        expr: |
+          sum(rate(redis_commands_processed_total[5m]))
+
+      - record: rootsmarket:redis_cache_hit_ratio:rate5m
+        expr: |
+          sum(rate(redis_keyspace_hits_total[5m]))
+          /
+          clamp_min(
+            sum(rate(redis_keyspace_hits_total[5m]))
+            +
+            sum(rate(redis_keyspace_misses_total[5m])),
+            0.000001
+          )

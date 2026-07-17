@@ -1,0 +1,70 @@
+/*
+|--------------------------------------------------------------------------
+| RootsMarket Global Styles
+|--------------------------------------------------------------------------
+|
+| Global reset and design tokens.
+| Component-specific styles belong in their own CSS files.
+|
+*/
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family:
+    Inter,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+
+  color: #1f2937;
+  background: #f8faf7;
+
+  --primary: #166534;
+  --primary-light: #22c55e;
+  --background: #f8faf7;
+  --surface: #ffffff;
+  --border: #e5e7eb;
+  --text: #1f2937;
+  --muted: #6b7280;
+
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: var(--background);
+}
+
+body {
+  color: var(--text);
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
