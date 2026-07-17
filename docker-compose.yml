@@ -33,7 +33,7 @@ x-default-logging: &default-logging
 services:
   # DATA LAYER
   postgres:
-    image: postgres:${POSTGRES_VERSION:-16}
+    image: postgres:${POSTGRES_VERSION}
     container_name: rootsmarket-postgres
     restart: unless-stopped
     environment:
