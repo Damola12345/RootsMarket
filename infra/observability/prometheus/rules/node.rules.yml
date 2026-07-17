@@ -1,0 +1,103 @@
+groups:
+  # -------------------------------------------------------
+  # Docker host / Docker Desktop Linux VM metrics
+  # -------------------------------------------------------
+  - name: rootsmarket_node_rules
+    interval: 15s
+
+    rules:
+      # Number of CPUs visible to node-exporter.
+      - record: rootsmarket:node_cpu_count
+        expr: |
+          count without (cpu, mode) (
+            count without (mode) (
+              node_cpu_seconds_total{job="node-exporter"}
+            )
+          )
+
+      # CPU utilisation ratio from 0 to 1.
+      - record: rootsmarket:node_cpu_utilisation:rate5m
+        expr: |
+          1 -
+          avg without (cpu, mode) (
+            rate(
+              node_cpu_seconds_total{
+                job="node-exporter",
+                mode="idle"
+              }[5m]
+            )
+          )
+
+      # Memory utilisation ratio from 0 to 1.
+      - record: rootsmarket:node_memory_utilisation:ratio
+        expr: |
+          1 -
+          (
+            node_memory_MemAvailable_bytes{job="node-exporter"}
+            /
+            node_memory_MemTotal_bytes{job="node-exporter"}
+          )
+
+      # Root filesystem utilisation ratio.
+      - record: rootsmarket:node_filesystem_utilisation:ratio
+        expr: |
+          1 -
+          (
+            node_filesystem_avail_bytes{
+              job="node-exporter",
+              mountpoint="/",
+              fstype!~"tmpfs|overlay|squashfs"
+            }
+            /
+            node_filesystem_size_bytes{
+              job="node-exporter",
+              mountpoint="/",
+              fstype!~"tmpfs|overlay|squashfs"
+            }
+          )
+
+      # Network receive throughput.
+      - record: rootsmarket:node_network_receive_bytes:rate5m
+        expr: |
+          sum without (device) (
+            rate(
+              node_network_receive_bytes_total{
+                job="node-exporter",
+                device!="lo"
+              }[5m]
+            )
+          )
+
+      # Network transmit throughput.
+      - record: rootsmarket:node_network_transmit_bytes:rate5m
+        expr: |
+          sum without (device) (
+            rate(
+              node_network_transmit_bytes_total{
+                job="node-exporter",
+                device!="lo"
+              }[5m]
+            )
+          )
+
+      # Disk I/O busy time.
+      - record: rootsmarket:node_disk_io_utilisation:rate5m
+        expr: |
+          sum without (device) (
+            rate(
+              node_disk_io_time_seconds_total{
+                job="node-exporter",
+                device!=""
+              }[5m]
+            )
+          )
+
+      # System load per CPU.
+      - record: rootsmarket:node_load1_per_cpu:ratio
+        expr: |
+          node_load1{job="node-exporter"}
+          /
+          clamp_min(
+            rootsmarket:node_cpu_count,
+            1
+          )

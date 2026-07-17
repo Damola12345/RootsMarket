@@ -1,0 +1,88 @@
+groups:
+  # Per-container resource metrics from cAdvisor
+  - name: rootsmarket_container_rules
+    interval: 15s
+
+    rules:
+      # CPU cores currently used by each Compose service.
+      - record: rootsmarket:container_cpu_usage_cores:rate5m
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            rate(
+              container_cpu_usage_seconds_total{
+                job="cadvisor",
+                container_label_com_docker_compose_service!=""
+              }[5m]
+            )
+          )
+
+      # Working-set memory used by each Compose service.
+      - record: rootsmarket:container_memory_working_set_bytes
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            container_memory_working_set_bytes{
+              job="cadvisor",
+              container_label_com_docker_compose_service!=""
+            }
+          )
+
+      # Network receive throughput by Compose service.
+      - record: rootsmarket:container_network_receive_bytes:rate5m
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            rate(
+              container_network_receive_bytes_total{
+                job="cadvisor",
+                container_label_com_docker_compose_service!="",
+                interface!="lo"
+              }[5m]
+            )
+          )
+
+      # Network transmit throughput by Compose service.
+      - record: rootsmarket:container_network_transmit_bytes:rate5m
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            rate(
+              container_network_transmit_bytes_total{
+                job="cadvisor",
+                container_label_com_docker_compose_service!="",
+                interface!="lo"
+              }[5m]
+            )
+          )
+
+      # Writable filesystem usage by Compose service.
+      - record: rootsmarket:container_filesystem_usage_bytes
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            container_fs_usage_bytes{
+              job="cadvisor",
+              container_label_com_docker_compose_service!="",
+              device!=""
+            }
+          )
+
+      # CPU throttling ratio.
+      - record: rootsmarket:container_cpu_throttling:ratio5m
+        expr: |
+          sum by (container_label_com_docker_compose_service) (
+            rate(
+              container_cpu_cfs_throttled_periods_total{
+                job="cadvisor",
+                container_label_com_docker_compose_service!=""
+              }[5m]
+            )
+          )
+          /
+          clamp_min(
+            sum by (container_label_com_docker_compose_service) (
+              rate(
+                container_cpu_cfs_periods_total{
+                  job="cadvisor",
+                  container_label_com_docker_compose_service!=""
+                }[5m]
+              )
+            ),
+            0.000001
+          )

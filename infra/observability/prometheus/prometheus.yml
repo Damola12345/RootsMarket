@@ -86,3 +86,73 @@ scrape_configs:
           component: backend
           application: rootsmarket
           environment: development
+
+    # PostgreSQL exporter metrics.
+  - job_name: postgres-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - postgres-exporter:9187
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: postgres
+          component: database
+
+  # Redis exporter metrics.
+  - job_name: redis-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - redis-exporter:9121
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: redis
+          component: cache
+
+  # RabbitMQ built-in Prometheus endpoint.
+  - job_name: rabbitmq
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - rabbitmq:15692
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: rabbitmq
+          component: messaging
+
+  # Docker Desktop Linux VM or Linux host metrics.
+  - job_name: node-exporter
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - node-exporter:9100
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: docker-host
+          component: infrastructure
+
+    # Per-container resource metrics from cAdvisor.
+  - job_name: cadvisor
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - cadvisor:8080
+
+        labels:
+          application: rootsmarket
+          environment: development
+          service: cadvisor
+          component: container-monitoring
