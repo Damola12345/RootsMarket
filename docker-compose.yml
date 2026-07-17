@@ -13,7 +13,7 @@ x-common-env: &common-env
   RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
 
   # Dockerized frontend is available on port 3000.
-  CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+  CORS_ORIGIN: ${CORS_ORIGIN}
 
 # Shared labels used by Docker discovery, Alloy, cAdvisor, and general service id
 x-default-labels: &default-labels
@@ -305,7 +305,7 @@ services:
     restart: unless-stopped
     environment:
       DATA_SOURCE_NAME: >-
-        postgresql://${POSTGRES_USER:-rootsmarket}:${POSTGRES_PASSWORD:-rootsmarket}@postgres:5432/${POSTGRES_DB:-rootsmarket}?sslmode=disable
+        postgresql://${POSTGRES_USER:-rootsmarket}:${POSTGRES_PASSWORD:-rootsmarket}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     ports:
       - "9187:9187"
     depends_on:
