@@ -305,7 +305,7 @@ services:
     restart: unless-stopped
     environment:
       DATA_SOURCE_NAME: >-
-        postgresql://${POSTGRES_USER:-rootsmarket}:${POSTGRES_PASSWORD:-rootsmarket}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     ports:
       - "9187:9187"
     depends_on:
