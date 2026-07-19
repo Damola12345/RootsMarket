@@ -1,0 +1,845 @@
+{
+  "id": null,
+  "uid": "rootsmarket-platform-logs",
+  "title": "RootsMarket Platform Logs",
+  "description": "Mixed-format infrastructure and observability logs collected by Grafana Alloy and stored in Loki.",
+  "tags": [
+    "rootsmarket",
+    "platform",
+    "infrastructure",
+    "logs",
+    "loki",
+    "alloy"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "version": 2,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d"
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "loki",
+        "label": "Loki datasource",
+        "type": "datasource",
+        "query": "loki",
+        "refresh": 1,
+        "options": [],
+        "current": {}
+      },
+      {
+        "name": "service",
+        "label": "Platform Service",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "$loki"
+        },
+        "definition": "label_values({application=\"rootsmarket\", log_type=\"platform\"}, service)",
+        "query": "label_values({application=\"rootsmarket\", log_type=\"platform\"}, service)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      },
+      {
+        "name": "text_filter",
+        "label": "Text Filter",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Platform Logs",
+      "description": "Total platform and infrastructure log entries in the selected time range.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"}[$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Platform Error Signals",
+      "description": "Error and fatal severity markers. Uses anchored severity patterns instead of matching every occurrence of the word error.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"} |~ \"(?i)(^|[[:space:]])(level|lvl|severity)=(error|err|fatal)([[:space:]]|$)|(^|[[:space:]])(ERROR|FATAL|PANIC)(:|[[:space:]])|\\\\[(error|fatal)\\\\]\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Lifecycle Signals",
+      "description": "Approximate container lifecycle messages. Actual restart counters should continue to come from cAdvisor metrics.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"} |~ \"(?i)(restarting|restart detected|shutting down|shutdown complete|terminated unexpectedly|starting server|ready to accept connections)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Database Warning Signals",
+      "description": "PostgreSQL warning, error, fatal and panic messages.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=\"postgres\"} |~ \"(^|[[:space:]])(WARNING|ERROR|FATAL|PANIC):\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Messaging Error Signals",
+      "description": "RabbitMQ error, critical and failed-operation messages.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=\"rabbitmq\"} |~ \"(?i)(\\\\[error\\\\]|\\\\[critical\\\\]|(^|[[:space:]])error:|failed to|connection.*closed unexpectedly)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Active Platform Services",
+      "description": "Platform services that emitted logs in the selected time range.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "count(sum by (service) (count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"}[$__range]))) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Loki Operational Errors",
+      "description": "Loki entries with an actual logfmt error or fatal level. This does not search arbitrary query text for the word error.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=\"loki\"} |~ \"(^|[[:space:]])level=(error|fatal)([[:space:]]|$)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Alloy Collection Errors",
+      "description": "Alloy entries with error-level collection, discovery, processing or write failures.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=\"alloy\"} |~ \"(?i)((^|[[:space:]])level=(error|fatal)([[:space:]]|$)|failed to (collect|discover|process|send|write)|dropping batch)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Prometheus Scrape Failures",
+      "description": "Prometheus scrape, target and service-discovery failure messages.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=\"prometheus\"} |~ \"(?i)(scrape.*(failed|error)|failed to scrape|target.*down|server returned HTTP status|context deadline exceeded|connection refused)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Exporter Error Signals",
+      "description": "Exporter logs containing anchored error or fatal severity markers.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"platform\", component=\"exporter\", service=~\"$service\"} |~ \"(?i)((^|[[:space:]])level=(error|fatal)([[:space:]]|$)|(^|[[:space:]])(ERROR|FATAL):|failed to collect)\" [$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Platform Log Rate by Service",
+      "description": "Infrastructure log rate grouped by service.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logsps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "expr": "sum by (service) (rate({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"}[$__interval]))",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Top Noisy Platform Services",
+      "description": "Platform services producing the largest volume of log entries.",
+      "type": "bargauge",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "topk(10, sum by (service) (count_over_time({application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"}[$__range])))",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Recent Platform Error Signals",
+      "description": "Recent platform entries containing anchored error, fatal or panic severity markers.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "direction": "backward",
+          "expr": "{application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"} |~ \"(?i)(^|[[:space:]])(level|lvl|severity)=(error|err|fatal)([[:space:]]|$)|(^|[[:space:]])(ERROR|FATAL|PANIC)(:|[[:space:]])|\\\\[(error|fatal)\\\\]\""
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Infrastructure Live Log Stream",
+      "description": "Mixed-format platform logs. Use the service selector or optional text filter to narrow the stream.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "direction": "backward",
+          "expr": "{application=\"rootsmarket\", log_type=\"platform\", service=~\"$service\"} |~ \"(?i)$text_filter\""
+        }
+      ]
+    }
+  ]
+}

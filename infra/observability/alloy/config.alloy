@@ -1,15 +1,5 @@
-
-// Alloy internal logging.
-logging {
-  level  = "info"
-  format = "logfmt"
-}
-
-// Discover Docker containers through the Docker socket.
-// Only containers carrying the RootsMarket project label are selected
 discovery.docker "rootsmarket" {
-  host             = "unix:///var/run/docker.sock"
-  refresh_interval = "5s"
+  host = "unix:///var/run/docker.sock"
 
   filter {
     name   = "label"
@@ -17,29 +7,22 @@ discovery.docker "rootsmarket" {
   }
 }
 
+//
+// Application containers
+//
 
-// Convert Docker metadata into useful Loki labels
-// Compose automatically supplies its project and service
-// labels, while RootsMarket supplies application labels
-
-discovery.relabel "rootsmarket" {
+discovery.relabel "rootsmarket_application" {
   targets = discovery.docker.rootsmarket.targets
 
   rule {
-    source_labels = ["__meta_docker_container_name"]
-    regex         = "/(.*)"
-    replacement   = "$1"
-    target_label  = "container"
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_component"]
+    regex         = "application|backend|frontend"
+    action        = "keep"
   }
 
   rule {
-    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_service"]
     target_label  = "service"
-  }
-
-  rule {
-    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
-    target_label  = "compose_project"
   }
 
   rule {
@@ -53,30 +36,120 @@ discovery.relabel "rootsmarket" {
   }
 
   rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+  }
+
+  rule {
     target_label = "application"
     replacement  = "rootsmarket"
   }
+
+  rule {
+    target_label = "log_type"
+    replacement  = "application"
+  }
 }
 
-
-// Read stdout and stderr from discovered containers
-// The original structured JSON log line is preserved
-// In Grafana, use `| json` to parse Node.js logs
-
-loki.source.docker "rootsmarket" {
-  host             = "unix:///var/run/docker.sock"
-  targets          = discovery.relabel.rootsmarket.output
-  forward_to       = [loki.write.rootsmarket.receiver]
-  refresh_interval = "5s"
+loki.source.docker "rootsmarket_application" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.rootsmarket_application.output
+  forward_to = [loki.process.rootsmarket_application.receiver]
 }
 
-// Send collected logs to Loki
-loki.write "rootsmarket" {
-  endpoint {
-    url = "http://loki:3100/loki/api/v1/push"
+loki.process "rootsmarket_application" {
+  stage.json {
+    expressions = {
+      level      = "level",
+      timestamp  = "timestamp",
+      message    = "message",
+      request_id = "requestId",
+      trace_id   = "traceId",
+      span_id    = "spanId",
+      method     = "method",
+      path       = "path",
+      status     = "status",
+    }
   }
 
-  external_labels = {
-    application = "rootsmarket",
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+  }
+
+  // Preserve the original JSON line so requestId, traceId, spanId,
+  // method, path and status remain available as parsed fields.
+  forward_to = [loki.write.default.receiver]
+}
+
+//
+// Platform and infrastructure containers
+//
+
+discovery.relabel "rootsmarket_platform" {
+  targets = discovery.docker.rootsmarket.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_component"]
+    regex         = "application|backend|frontend"
+    action        = "drop"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_component"]
+    target_label  = "component"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_rootsmarket_environment"]
+    target_label  = "environment"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+  }
+
+  rule {
+    target_label = "application"
+    replacement  = "rootsmarket"
+  }
+
+  rule {
+    target_label = "log_type"
+    replacement  = "platform"
+  }
+}
+
+loki.source.docker "rootsmarket_platform" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.rootsmarket_platform.output
+  forward_to = [loki.process.rootsmarket_platform.receiver]
+}
+
+loki.process "rootsmarket_platform" {
+  // Platform logs are preserved exactly as received because Grafana,
+  // Loki, PostgreSQL, Redis, RabbitMQ and exporters use mixed formats.
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
   }
 }
