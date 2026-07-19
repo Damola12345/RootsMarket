@@ -1,0 +1,523 @@
+{
+  "id": null,
+  "uid": "rootsmarket-application-logs",
+  "title": "RootsMarket Application Logs",
+  "description": "Structured application logs for the RootsMarket frontend and Node.js services.",
+  "tags": [
+    "rootsmarket",
+    "application",
+    "logs",
+    "loki",
+    "alloy"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "version": 3,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d"
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "loki",
+        "label": "Loki datasource",
+        "type": "datasource",
+        "query": "loki",
+        "refresh": 1,
+        "options": [],
+        "current": {}
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "$loki"
+        },
+        "definition": "label_values({application=\"rootsmarket\", log_type=\"application\"}, service)",
+        "query": "label_values({application=\"rootsmarket\", log_type=\"application\"}, service)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      },
+      {
+        "name": "severity",
+        "label": "Severity",
+        "type": "custom",
+        "query": "All : .*,Info : info,Warning : warn|warning,Error : error,Debug : debug",
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": ".*",
+            "selected": true
+          },
+          {
+            "text": "Info",
+            "value": "info",
+            "selected": false
+          },
+          {
+            "text": "Warning",
+            "value": "warn|warning",
+            "selected": false
+          },
+          {
+            "text": "Error",
+            "value": "error",
+            "selected": false
+          },
+          {
+            "text": "Debug",
+            "value": "debug",
+            "selected": false
+          }
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Application Logs",
+      "description": "Total structured application log entries in the selected time range.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\"}[$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Errors",
+      "description": "Application log entries whose structured level is error.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=\"error\"}[$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Warnings",
+      "description": "Application log entries whose structured level is warn or warning.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=~\"warn|warning\"}[$__range])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Active Application Services",
+      "description": "Application services that emitted logs in the selected time range.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "count(sum by (service) (count_over_time({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\"}[$__range]))) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Log Rate by Service",
+      "description": "Application log rate grouped by service and filtered by structured severity.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logsps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "expr": "sum by (service) (rate({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=~\"$severity\"}[$__interval]))",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Top Noisy Application Services",
+      "description": "Application services producing the most log entries.",
+      "type": "bargauge",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "editorMode": "code",
+          "expr": "topk(10, sum by (service) (count_over_time({application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=~\"$severity\"}[$__range])))",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Recent Application Errors",
+      "description": "Recent structured application log entries with level=error.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "direction": "backward",
+          "expr": "{application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=\"error\"}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Application Live Log Stream",
+      "description": "Application logs filtered by service and structured severity.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "$loki"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "editorMode": "code",
+          "direction": "backward",
+          "expr": "{application=\"rootsmarket\", log_type=\"application\", service=~\"$service\", level=~\"$severity\"}"
+        }
+      ]
+    }
+  ]
+}
