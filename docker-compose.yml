@@ -1,6 +1,7 @@
 # Shared environment variables for Node.js services.
 x-common-env: &common-env
   NODE_ENV: ${NODE_ENV}
+  NODE_OPTIONS: --max-old-space-size=192
 
   POSTGRES_HOST: postgres
   POSTGRES_PORT: 5432
@@ -15,10 +16,23 @@ x-common-env: &common-env
   # Dockerized frontend is available on port 3000.
   CORS_ORIGIN: ${CORS_ORIGIN}
 
+  # OpenTelemetry
+  OTEL_SERVICE_NAMESPACE: rootsmarket
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+  OTEL_LOG_LEVEL: info
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  SERVICE_VERSION: ${SERVICE_VERSION}
+  OTEL_BSP_EXPORT_TIMEOUT: "5000"
+  OTEL_BSP_SCHEDULE_DELAY: "1000"
+
 # Shared labels used by Docker discovery, Alloy, cAdvisor, and general service id
 x-default-labels: &default-labels
   com.rootsmarket.project: rootsmarket
-  com.rootsmarket.environment: ${NODE_ENV:-development}
+  com.rootsmarket.environment: ${NODE_ENV}
   com.rootsmarket.managed-by: docker-compose
 
 # Shared Docker log rotation configuration
@@ -48,6 +62,7 @@ services:
       - ./infra/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
     networks:
       - rootsmarket-net
+    mem_limit: 1g
     healthcheck:
       test:
         [
@@ -66,6 +81,7 @@ services:
     image: redis:${REDIS_VERSION}
     container_name: rootsmarket-redis
     restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "6379:6379"
     networks:
@@ -75,6 +91,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 256m
 
     labels:
       <<: *default-labels
@@ -103,6 +120,7 @@ services:
       - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     networks:
       - rootsmarket-net
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -113,165 +131,181 @@ services:
       <<: *default-labels
       com.rootsmarket.service: rabbitmq
       com.rootsmarket.component: messaging
-
     logging: *default-logging
 
   # NODE.JS MICROSERVICES
   user-service:
     build:
-      context: ./services/user-service
-
+      context: .
+      dockerfile: ./services/user-service/Dockerfile
     container_name: rootsmarket-user-service
     restart: unless-stopped
-
     ports:
       - "3001:3001"
-
     environment:
       <<: *common-env
       PORT: 3001
       SERVICE_NAME: user-service
-
+      OTEL_SERVICE_NAME: user-service
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-
+      otel-collector:
+        condition: service_started
     networks:
       - rootsmarket-net
-
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     labels:
       <<: *default-labels
       com.rootsmarket.service: user-service
       com.rootsmarket.component: backend
-
     logging: *default-logging
 
 
   product-service:
     build:
-      context: ./services/product-service
-
+      context: .
+      dockerfile: ./services/product-service/Dockerfile
     container_name: rootsmarket-product-service
     restart: unless-stopped
-
     ports:
       - "3002:3002"
-
     environment:
       <<: *common-env
       PORT: 3002
       SERVICE_NAME: product-service
-
+      OTEL_SERVICE_NAME: product-service
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-
+      otel-collector:
+        condition: service_started
     networks:
       - rootsmarket-net
-
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     labels:
       <<: *default-labels
       com.rootsmarket.service: product-service
       com.rootsmarket.component: backend
-
     logging: *default-logging
-
 
   order-service:
     build:
-      context: ./services/order-service
-
+      context: .
+      dockerfile: ./services/order-service/Dockerfile
     container_name: rootsmarket-order-service
     restart: unless-stopped
-
     ports:
       - "3003:3003"
-
     environment:
       <<: *common-env
       PORT: 3003
       SERVICE_NAME: order-service
-
+      OTEL_SERVICE_NAME: order-service
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-
+      otel-collector:
+        condition: service_started
     networks:
       - rootsmarket-net
-
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     labels:
       <<: *default-labels
       com.rootsmarket.service: order-service
       com.rootsmarket.component: backend
-
     logging: *default-logging
-
 
   payment-service:
     build:
-      context: ./services/payment-service
-
+      context: .
+      dockerfile: ./services/payment-service/Dockerfile
     container_name: rootsmarket-payment-service
     restart: unless-stopped
-
     ports:
       - "3004:3004"
-
     environment:
       <<: *common-env
       PORT: 3004
       SERVICE_NAME: payment-service
-
+      OTEL_SERVICE_NAME: payment-service
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-
+      otel-collector:
+        condition: service_started 
     networks:
       - rootsmarket-net
-
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     labels:
       <<: *default-labels
       com.rootsmarket.service: payment-service
       com.rootsmarket.component: backend
-
     logging: *default-logging
-
 
   notification-service:
     build:
-      context: ./services/notification-service
-
+      context: .
+      dockerfile: ./services/notification-service/Dockerfile
     container_name: rootsmarket-notification-service
     restart: unless-stopped
-
     ports:
       - "3005:3005"
-
     environment:
       <<: *common-env
       PORT: 3005
       SERVICE_NAME: notification-service
-
+      OTEL_SERVICE_NAME: notification-service
     depends_on:
       rabbitmq:
         condition: service_healthy
-
+      otel-collector:
+        condition: service_started 
     networks:
       - rootsmarket-net
-
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     labels:
       <<: *default-labels
       com.rootsmarket.service: notification-service
       com.rootsmarket.component: backend
-
     logging: *default-logging
 
   # FRONTEND
@@ -283,19 +317,25 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - user-service
-      - product-service
-      - order-service
-      - payment-service
-      - notification-service
+      user-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started 
     networks:
       - rootsmarket-net
-
+    mem_limit: 128m
     labels:
       <<: *default-labels
       com.rootsmarket.service: frontend
       com.rootsmarket.component: frontend
-
     logging: *default-logging
 
   # EXPORTERS
@@ -313,7 +353,6 @@ services:
         condition: service_healthy
     networks:
       - rootsmarket-net
-    cpus: 0.25
     mem_limit: 256m
     labels:
       <<: *default-labels
@@ -335,7 +374,6 @@ services:
         condition: service_healthy
     networks:
       - rootsmarket-net
-    cpus: 0.25
     mem_limit: 128m
     labels:
       <<: *default-labels
@@ -361,14 +399,12 @@ services:
       - /:/rootfs:ro
     networks:
       - rootsmarket-net
-    cpus: 0.25
     mem_limit: 128m
     labels:
       <<: *default-labels
       com.rootsmarket.service: node-exporter
       com.rootsmarket.component: observability
     logging: *default-logging
-
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:${CADVISOR_VERSION}
@@ -389,13 +425,11 @@ services:
       - /var/lib/docker:/var/lib/docker:ro
     networks:
       - rootsmarket-net
-    cpus: 0.5
     mem_limit: 256m
     labels:
       <<: *default-labels
       com.rootsmarket.service: cadvisor
       com.rootsmarket.component: observability
-
     logging: *default-logging
 
 
@@ -412,6 +446,7 @@ services:
       - "--web.enable-lifecycle"
       - "--web.external-url=http://localhost:9090"
       - "--log.level=info"
+      - "--web.enable-remote-write-receiver"
     ports:
       - "9090:9090"
     volumes:
@@ -420,7 +455,6 @@ services:
       - prometheus-data:/prometheus
     networks:
       - rootsmarket-net
-    cpus: 0.5
     mem_limit: 512m
     labels:
       <<: *default-labels
@@ -442,7 +476,6 @@ services:
       - loki-data:/loki
     networks:
       - rootsmarket-net
-    cpus: 0.5
     mem_limit: 512m
     labels:
       <<: *default-labels
@@ -471,7 +504,6 @@ services:
       - loki
     networks:
       - rootsmarket-net
-    cpus: 0.25
     mem_limit: 256m
     labels:
       <<: *default-labels
@@ -502,13 +534,62 @@ services:
       - loki
     networks:
       - rootsmarket-net
-    cpus: 0.5
     mem_limit: 512m
     labels:
       <<: *default-labels
       com.rootsmarket.service: grafana
       com.rootsmarket.component: observability
+    logging: *default-logging
+  
+  #TRACE COLLECTION
+  tempo:
+    image: grafana/tempo:${TEMPO_VERSION}
+    container_name: rootsmarket-tempo
+    command:
+      - -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - ./infra/observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+    expose:
+      - "4317"
+      - "4318"
+    restart: unless-stopped
+    networks:
+      - rootsmarket-net
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: tempo
+      com.rootsmarket.component: observability
+    logging: *default-logging
+    
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION}
+    container_name: rootsmarket-otel-collector
+    command:
+      - --config=/etc/otelcol-contrib/config.yml
+    environment:
+      DEPLOYMENT_ENVIRONMENT: ${NODE_ENV}
+    volumes:
+      - ./infra/observability/otel-collector/config.yml:/etc/otelcol-contrib/config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+    restart: unless-stopped
+    depends_on:
+      tempo:
+        condition: service_started 
+    networks:
+      - rootsmarket-net
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+      com.rootsmarket.service: otel-collector
+      com.rootsmarket.component: observability
     logging: *default-logging
 
 
@@ -527,3 +608,4 @@ volumes:
   grafana-data:
   loki-data:
   alloy-data:
+  tempo-data:
