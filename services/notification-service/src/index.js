@@ -4,6 +4,11 @@ const express = require("express");
 const cors = require("cors");
 const amqp = require("amqplib");
 
+const { logger } = require("@rootsmarket/observability/logger");
+const { shutdownTracing } = require("@rootsmarket/observability/tracing");
+const { consumeWithTrace } = require("@rootsmarket/observability/rabbitmq-tracing");
+const { createHttpMetricsMiddleware } = require("@rootsmarket/observability/http-metrics");
+
 const {
   register,
   httpRequestsTotal,
@@ -18,51 +23,39 @@ const app = express();
 
 const SERVICE_NAME = "notification-service";
 const PORT = process.env.PORT || 3005;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
-const RABBITMQ_URL =
-  process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
+const RABBITMQ_URL = process.env.RABBITMQ_URL || "";
 
 const PAYMENT_COMPLETED_QUEUE = "payment.completed";
 
-app.use(cors({ origin: CORS_ORIGIN }));
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+  : true;
+
+app.use(
+  cors({
+    origin: CORS_ORIGIN,
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "traceparent",
+      "tracestate",
+      "baggage",
+      "x-request-id",
+    ],
+    exposedHeaders: ["traceparent", "x-request-id"],
+  })
+);
+
 app.use(express.json());
 
-// Record Prometheus HTTP metrics for every request.
-app.use((req, res, next) => {
-  httpRequestsInFlight.inc();
-
-  const end = httpRequestDuration.startTimer({
-    method: req.method,
-    route: req.path,
-  });
-
-  res.on("finish", () => {
-    end({ status: res.statusCode });
-
-    httpRequestsTotal.inc({
-      method: req.method,
-      route: req.path,
-      status: res.statusCode,
-    });
-
-    httpRequestsInFlight.dec();
-  });
-
-  next();
-});
-
-// Structured JSON logger.
-function log(level, message, meta = {}) {
-  console.log(
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      service: SERVICE_NAME,
-      level,
-      message,
-      ...meta,
-    })
-  );
-}
+app.use(
+  createHttpMetricsMiddleware({
+    httpRequestsTotal,
+    httpRequestDuration,
+    httpRequestsInFlight,
+  })
+);
 
 let rabbitConnection = null;
 let rabbitChannel = null;
@@ -79,19 +72,15 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Process payment.completed messages from RabbitMQ.
-async function processPaymentCompleted(message) {
-  const raw = message.content.toString();
-
-  // Record RabbitMQ message consumption.
-  rabbitmqMessagesConsumedTotal.inc({
-    queue: PAYMENT_COMPLETED_QUEUE,
-  });
+/**
+ * consumeWithTrace owns ack/nack: returning acks, throwing nacks.
+ * Do not call rabbitChannel.ack() or .nack() in here.
+ */
+async function handlePaymentCompleted(event) {
+  rabbitmqMessagesConsumedTotal.inc({ queue: PAYMENT_COMPLETED_QUEUE });
 
   try {
-    const event = JSON.parse(raw);
-
-    log("info", "payment_completed_event_received", {
+    logger.info("payment_completed_event_received", {
       orderId: event.orderId,
       paymentId: event.paymentId,
       userId: event.userId,
@@ -99,52 +88,45 @@ async function processPaymentCompleted(message) {
       status: event.status,
     });
 
-    // MVP notification action: write a structured log.
-    log("info", "notification_sent", {
+    // Your notification logic goes here.
+    logger.info("notification_sent", {
       type: "payment_confirmation",
       orderId: event.orderId,
       paymentId: event.paymentId,
-      message: `Notification sent for order ${event.orderId}`,
     });
 
-    // Record successful notification.
     notificationsSentTotal.inc();
-
-    rabbitChannel.ack(message);
   } catch (err) {
-    // Record failed notification handling.
     notificationsFailedTotal.inc();
 
-    log("error", "notification_processing_failed", {
-      error: err.message || String(err),
-      rawMessage: raw,
+    logger.error("notification_processing_failed", {
+      orderId: event?.orderId,
+      error: err,
     });
 
-    rabbitChannel.nack(message, false, false);
+    throw err;
   }
 }
 
-// Connect to RabbitMQ and consume payment.completed events.
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
-  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, {
-    durable: true,
-  });
+  await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, { durable: true });
 
   rabbitChannel.prefetch(1);
 
-  await rabbitChannel.consume(PAYMENT_COMPLETED_QUEUE, processPaymentCompleted, {
-    noAck: false,
-  });
+  await consumeWithTrace(
+    rabbitChannel,
+    PAYMENT_COMPLETED_QUEUE,
+    handlePaymentCompleted
+  );
 
-  log("info", "rabbitmq_consumer_started", {
+  logger.info("rabbitmq_consumer_started", {
     consuming: PAYMENT_COMPLETED_QUEUE,
   });
 }
 
-// Prometheus scrape endpoint.
 app.get("/metrics", async (req, res) => {
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
@@ -154,9 +136,9 @@ async function start() {
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", {
+    logger.info("service_started", {
       port: PORT,
-      corsOrigin: CORS_ORIGIN,
+      corsOrigins: CORS_ORIGIN === true ? "all" : CORS_ORIGIN,
     });
   });
 }
@@ -167,27 +149,24 @@ async function shutdown() {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  log("info", "service_shutting_down");
+  logger.info("service_shutting_down");
 
   try {
-    if (rabbitChannel) {
-      await rabbitChannel.close();
-    }
+    if (rabbitChannel) await rabbitChannel.close();
   } catch (err) {
-    log("warn", "rabbitmq_channel_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("rabbitmq_channel_shutdown_failed", { error: err });
   }
 
   try {
-    if (rabbitConnection) {
-      await rabbitConnection.close();
-    }
+    if (rabbitConnection) await rabbitConnection.close();
   } catch (err) {
-    log("warn", "rabbitmq_connection_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("rabbitmq_connection_shutdown_failed", { error: err });
   }
+
+  // Last, and awaited: flush buffered spans before the process goes away.
+  // BatchSpanProcessor holds spans for up to 5s, so a consumer-only service
+  // like this can lose an entire run's worth on restart without it.
+  await shutdownTracing("shutdown");
 
   process.exit(0);
 }
@@ -196,9 +175,6 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 start().catch((err) => {
-  log("error", "service_start_failed", {
-    error: err.message || String(err),
-  });
-
+  logger.error("service_start_failed", { error: err });
   process.exit(1);
 });
