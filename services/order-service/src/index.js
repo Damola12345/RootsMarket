@@ -4,7 +4,15 @@ const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
 const amqp = require("amqplib");
-const crypto = require("crypto");
+
+const { logger } = require("@rootsmarket/observability/logger");
+const { withoutTracing } = require("@rootsmarket/observability/suppress");
+const { shutdownTracing } = require("@rootsmarket/observability/tracing");
+const { publishWithTrace } = require("@rootsmarket/observability/rabbitmq-tracing");
+const {
+  createHttpMetricsMiddleware,
+  createRequestContextMiddleware,
+} = require("@rootsmarket/observability/http-metrics");
 
 const {
   register,
@@ -20,71 +28,44 @@ const app = express();
 
 const SERVICE_NAME = "order-service";
 const PORT = process.env.PORT || 3003;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
-const RABBITMQ_URL =
-  process.env.RABBITMQ_URL || "amqp://admin:admin@localhost:5672";
+const RABBITMQ_URL = process.env.RABBITMQ_URL || "";
 
+// Default exchange: routing key is the queue name.
+const ORDER_CREATED_EXCHANGE = "";
 const ORDER_CREATED_QUEUE = "order.created";
+
+const CORS_ORIGIN = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
-    origin: CORS_ORIGIN,
+    origin: CORS_ORIGIN.length ? CORS_ORIGIN : true,
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "traceparent",
+      "tracestate",
+      "baggage",
+      "x-request-id",
+    ],
+    exposedHeaders: ["traceparent", "x-request-id"],
   })
 );
 
 app.use(express.json());
 
-// Record Prometheus HTTP metrics for every request.
-app.use((req, res, next) => {
-  httpRequestsInFlight.inc();
+app.use(
+  createHttpMetricsMiddleware({
+    httpRequestsTotal,
+    httpRequestDuration,
+    httpRequestsInFlight,
+  })
+);
 
-  const end = httpRequestDuration.startTimer({
-    method: req.method,
-    route: req.path,
-  });
-
-  res.on("finish", () => {
-    end({
-      status: res.statusCode,
-    });
-
-    httpRequestsTotal.inc({
-      method: req.method,
-      route: req.path,
-      status: res.statusCode,
-    });
-
-    httpRequestsInFlight.dec();
-  });
-
-  next();
-});
-
-function log(level, message, meta = {}) {
-  console.log(
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      service: SERVICE_NAME,
-      level,
-      message,
-      ...meta,
-    })
-  );
-}
-
-// Add request ID to every request for traceability.
-app.use((req, res, next) => {
-  req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
-  res.setHeader("x-request-id", req.requestId);
-
-  log("info", "request_received", {
-    requestId: req.requestId,
-    method: req.method,
-    path: req.path,
-  });
-
-  next();
-});
+app.use(createRequestContextMiddleware(logger));
 
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
@@ -93,6 +74,14 @@ const pool = new Pool({
   user: process.env.POSTGRES_USER || "rootsmarket",
   password: process.env.POSTGRES_PASSWORD || "rootsmarket",
   max: Number(process.env.POSTGRES_POOL_MAX || 10),
+
+  // Default idleTimeoutMillis is 10s and the healthcheck runs every 15s, so
+  // the pool reaped its last connection between every check and each one
+  // paid a fresh TCP connect + DNS lookup. Holding connections past the
+  // healthcheck interval keeps one warm and removes that cost from real
+  // requests too.
+  idleTimeoutMillis: Number(process.env.POSTGRES_IDLE_TIMEOUT_MS || 30000),
+  keepAlive: true,
 });
 
 let rabbitConnection = null;
@@ -102,68 +91,65 @@ async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
-  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, {
-    durable: true,
-  });
+  await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, { durable: true });
 
-  log("info", "rabbitmq_connected", {
-    queue: ORDER_CREATED_QUEUE,
-  });
+  logger.info("rabbitmq_connected", { queue: ORDER_CREATED_QUEUE });
 }
 
+// publishWithTrace opens the PRODUCER span and injects traceparent for us.
 async function publishOrderCreated(event) {
   if (!rabbitChannel) {
     throw new Error("RabbitMQ channel is not available");
   }
 
-  rabbitChannel.sendToQueue(
+  await publishWithTrace(
+    rabbitChannel,
+    ORDER_CREATED_EXCHANGE,
     ORDER_CREATED_QUEUE,
-    Buffer.from(JSON.stringify(event)),
+    event,
     {
-      persistent: true,
-      contentType: "application/json",
+      messageId: String(event.orderId),
     }
   );
 
-  // Record successful RabbitMQ publish.
-  rabbitmqMessagesPublishedTotal.inc({
-    queue: ORDER_CREATED_QUEUE,
-  });
+  rabbitmqMessagesPublishedTotal.inc({ queue: ORDER_CREATED_QUEUE });
 
-  log("info", "order_created_event_published", {
+  logger.info("order_created_event_published", {
     orderId: event.orderId,
     userId: event.userId,
     amount: event.amount,
   });
 }
 
-app.get("/health", async (req, res) => {
-  const health = {
-    status: "healthy",
-    service: SERVICE_NAME,
-    dependencies: {
-      postgres: "unknown",
-      rabbitmq: "unknown",
-    },
-  };
+app.get("/health", (req, res) =>
+  // Suppressed: the SELECT 1 and redis PING below are instrumented, and
+  // with /health excluded from HTTP tracing they would each become the
+  // root of their own orphan trace, every healthcheck interval.
+  withoutTracing(async () => {
+    const health = {
+      status: "healthy",
+      service: SERVICE_NAME,
+      dependencies: { postgres: "unknown", rabbitmq: "unknown" },
+    };
 
-  try {
-    await pool.query("SELECT 1");
-    health.dependencies.postgres = "healthy";
-  } catch {
-    health.status = "unhealthy";
-    health.dependencies.postgres = "unhealthy";
-  }
+    try {
+      await pool.query("SELECT 1");
+      health.dependencies.postgres = "healthy";
+    } catch {
+      health.status = "unhealthy";
+      health.dependencies.postgres = "unhealthy";
+    }
 
-  if (rabbitChannel) {
-    health.dependencies.rabbitmq = "healthy";
-  } else {
-    health.status = "unhealthy";
-    health.dependencies.rabbitmq = "unhealthy";
-  }
+    if (rabbitChannel) {
+      health.dependencies.rabbitmq = "healthy";
+    } else {
+      health.status = "unhealthy";
+      health.dependencies.rabbitmq = "unhealthy";
+    }
 
-  res.status(health.status === "healthy" ? 200 : 503).json(health);
-});
+    res.status(health.status === "healthy" ? 200 : 503).json(health);
+  })
+);
 
 app.post("/orders", async (req, res, next) => {
   const client = await pool.connect();
@@ -204,9 +190,7 @@ app.post("/orders", async (req, res, next) => {
       await client.query("ROLLBACK");
       ordersFailedTotal.inc();
 
-      return res.status(404).json({
-        error: "user not found",
-      });
+      return res.status(404).json({ error: "user not found" });
     }
 
     let totalAmount = 0;
@@ -299,24 +283,19 @@ app.post("/orders", async (req, res, next) => {
 
     await publishOrderCreated(event);
 
-    // Record successful order creation.
     ordersCreatedTotal.inc();
 
-    log("info", "order_created", {
+    logger.info("order_created", {
       requestId: req.requestId,
       orderId: order.id,
       userId,
       amount: totalAmount,
     });
 
-    res.status(201).json({
-      ...order,
-      items: orderItems,
-    });
+    res.status(201).json({ ...order, items: orderItems });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
 
-    // Record failed order creation.
     ordersFailedTotal.inc();
 
     next(err);
@@ -369,9 +348,7 @@ app.get("/orders/:id", async (req, res, next) => {
     );
 
     if (orderResult.rows.length === 0) {
-      return res.status(404).json({
-        error: "order not found",
-      });
+      return res.status(404).json({ error: "order not found" });
     }
 
     const itemsResult = await pool.query(
@@ -390,26 +367,21 @@ app.get("/orders/:id", async (req, res, next) => {
       [req.params.id]
     );
 
-    res.json({
-      ...orderResult.rows[0],
-      items: itemsResult.rows,
-    });
+    res.json({ ...orderResult.rows[0], items: itemsResult.rows });
   } catch (err) {
     next(err);
   }
 });
 
-// Prometheus scrape endpoint.
 app.get("/metrics", async (req, res) => {
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
 });
 
 app.use((err, req, res, next) => {
-  log("error", "request_failed", {
+  logger.error("request_failed", {
     requestId: req.requestId,
-    error: err.message,
-    stack: process.env.NODE_ENV === "production" ? undefined : err.stack,
+    error: err,
   });
 
   res.status(500).json({
@@ -420,15 +392,12 @@ app.use((err, req, res, next) => {
 
 async function start() {
   await pool.query("SELECT 1");
-  log("info", "postgres_connected");
+  logger.info("postgres_connected");
 
   await connectRabbitMQ();
 
   app.listen(PORT, () => {
-    log("info", "service_started", {
-      port: PORT,
-      corsOrigin: CORS_ORIGIN,
-    });
+    logger.info("service_started", { port: PORT, corsOrigin: CORS_ORIGIN });
   });
 }
 
@@ -438,31 +407,30 @@ async function shutdown() {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  log("info", "service_shutting_down");
+  logger.info("service_shutting_down");
 
   try {
     if (rabbitChannel) await rabbitChannel.close();
   } catch (err) {
-    log("warn", "rabbitmq_channel_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("rabbitmq_channel_shutdown_failed", { error: err });
   }
 
   try {
     if (rabbitConnection) await rabbitConnection.close();
   } catch (err) {
-    log("warn", "rabbitmq_connection_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("rabbitmq_connection_shutdown_failed", { error: err });
   }
 
   try {
     await pool.end();
   } catch (err) {
-    log("warn", "postgres_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("postgres_shutdown_failed", { error: err });
   }
+
+  // Last, and awaited: flush buffered spans before the process goes away.
+  // BatchSpanProcessor holds spans for up to 5s, so a consumer-only service
+  // like this can lose an entire run's worth on restart without it.
+  await shutdownTracing("shutdown");
 
   process.exit(0);
 }
@@ -471,9 +439,6 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 start().catch((err) => {
-  log("error", "service_start_failed", {
-    error: err.message || String(err),
-  });
-
+  logger.error("service_start_failed", { error: err });
   process.exit(1);
 });

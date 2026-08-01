@@ -1,3 +1,7 @@
+import { initializeTracing } from "./observability/tracing";
+
+initializeTracing();
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 

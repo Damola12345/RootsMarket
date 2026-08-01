@@ -28,3 +28,61 @@ datasources:
     jsonData:
       timeout: 60
       maxLines: 1000
+
+  - name: Tempo
+    uid: rootsmarket-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false
+    editable: true
+
+    jsonData:
+      httpMethod: GET
+
+      tracesToLogsV2:
+        datasourceUid: rootsmarket-loki
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        tags:
+          - key: service.name
+            value: service
+          - key: deployment.environment
+            value: environment
+        filterByTraceID: true
+        filterBySpanID: false
+
+      tracesToMetrics:
+        datasourceUid: rootsmarket-prometheus
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        tags:
+          - key: service.name
+            value: service
+          - key: deployment.environment
+            value: environment
+        queries:
+          - name: Request rate
+            query: >-
+              sum(rate(traces_spanmetrics_calls_total{
+                service_name="$${__span.tags["service.name"]}"
+              }[5m]))
+
+          - name: Error rate
+            query: >-
+              sum(rate(traces_spanmetrics_calls_total{
+                service_name="$${__span.tags["service.name"]}",
+                status_code="STATUS_CODE_ERROR"
+              }[5m]))
+
+      serviceMap:
+        datasourceUid: rootsmarket-prometheus
+
+      nodeGraph:
+        enabled: true
+
+      search:
+        hide: false
+
+      lokiSearch:
+        datasourceUid: rootsmarket-loki

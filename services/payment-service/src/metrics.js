@@ -1,4 +1,3 @@
-
 // Prometheus metrics for payment-service
 const client = require("prom-client");
 
@@ -14,6 +13,7 @@ const httpRequestsTotal = new client.Counter({
   name: "http_requests_total",
   help: "Total number of HTTP requests",
   labelNames: ["method", "route", "status"],
+  registers: [register],
 });
 
 const httpRequestDuration = new client.Histogram({
@@ -21,11 +21,13 @@ const httpRequestDuration = new client.Histogram({
   help: "HTTP request duration in seconds",
   labelNames: ["method", "route", "status"],
   buckets: [0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+  registers: [register],
 });
 
 const httpRequestsInFlight = new client.Gauge({
   name: "http_requests_in_flight",
   help: "Current number of in-flight HTTP requests",
+  registers: [register],
 });
 
 // Business Metrics
@@ -33,12 +35,14 @@ const httpRequestsInFlight = new client.Gauge({
 const paymentsProcessedTotal = new client.Counter({
   name: "payments_processed_total",
   help: "Total number of processed payments",
+  registers: [register],
 });
 
 // Failed payment processing.
 const paymentsFailedTotal = new client.Counter({
   name: "payments_failed_total",
   help: "Total number of failed payments",
+  registers: [register],
 });
 
 // RabbitMQ messages consumed.
@@ -46,6 +50,7 @@ const rabbitmqMessagesConsumedTotal = new client.Counter({
   name: "rabbitmq_messages_consumed_total",
   help: "Total RabbitMQ messages consumed",
   labelNames: ["queue"],
+  registers: [register],
 });
 
 // RabbitMQ messages published.
@@ -53,15 +58,8 @@ const rabbitmqMessagesPublishedTotal = new client.Counter({
   name: "rabbitmq_messages_published_total",
   help: "Total RabbitMQ messages published",
   labelNames: ["queue"],
+  registers: [register],
 });
-
-register.registerMetric(httpRequestsTotal);
-register.registerMetric(httpRequestDuration);
-register.registerMetric(httpRequestsInFlight);
-register.registerMetric(paymentsProcessedTotal);
-register.registerMetric(paymentsFailedTotal);
-register.registerMetric(rabbitmqMessagesConsumedTotal);
-register.registerMetric(rabbitmqMessagesPublishedTotal);
 
 module.exports = {
   register,

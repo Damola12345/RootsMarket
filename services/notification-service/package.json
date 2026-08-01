@@ -2,13 +2,18 @@
   "name": "notification-service",
   "version": "1.0.0",
   "description": "RootsMarket Notification Service",
+  "private": true,
+  "license": "UNLICENSED",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node --require @rootsmarket/observability/tracing src/index.js",
+    "dev": "nodemon --require @rootsmarket/observability/tracing src/index.js"
   },
-  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
+    "@rootsmarket/observability": "*",
     "amqplib": "^2.0.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

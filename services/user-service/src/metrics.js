@@ -1,4 +1,3 @@
-
 // Prometheus metrics for user-service
 const client = require("prom-client");
 
@@ -11,13 +10,13 @@ client.collectDefaultMetrics({
   prefix: "rootsmarket_",
 });
 
-
 // HTTP Metrics
 // Total HTTP requests received.
 const httpRequestsTotal = new client.Counter({
   name: "http_requests_total",
   help: "Total number of HTTP requests",
   labelNames: ["method", "route", "status"],
+  registers: [register],
 });
 
 // Duration of HTTP requests.
@@ -28,12 +27,14 @@ const httpRequestDuration = new client.Histogram({
 
   // Buckets from very fast to slow requests.
   buckets: [0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+  registers: [register],
 });
 
 // Number of currently active HTTP requests.
 const httpRequestsInFlight = new client.Gauge({
   name: "http_requests_in_flight",
   help: "Number of in-flight HTTP requests",
+  registers: [register],
 });
 
 // Business Metrics
@@ -41,13 +42,8 @@ const httpRequestsInFlight = new client.Gauge({
 const usersCreatedTotal = new client.Counter({
   name: "users_created_total",
   help: "Total number of users created",
+  registers: [register],
 });
-
-// Register all custom metrics.
-register.registerMetric(httpRequestsTotal);
-register.registerMetric(httpRequestDuration);
-register.registerMetric(httpRequestsInFlight);
-register.registerMetric(usersCreatedTotal);
 
 module.exports = {
   register,

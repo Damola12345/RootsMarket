@@ -1,0 +1,28 @@
+{
+  "name": "rootsmarket",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "RootsMarket cloud-native marketplace",
+  "workspaces": [
+    "shared/*",
+    "services/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start:user": "npm run start --workspace=user-service",
+    "start:product": "npm run start --workspace=product-service",
+    "start:order": "npm run start --workspace=order-service",
+    "start:payment": "npm run start --workspace=payment-service",
+    "start:notification": "npm run start --workspace=notification-service"
+  },
+  "allowScripts": {
+    "protobufjs@7.6.5": true,
+    "fsevents@2.3.3": true
+  },
+  "overrides": {
+    "@opentelemetry/sdk-node": "0.221.0"
+  }
+}

@@ -4,7 +4,14 @@ const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
-const crypto = require("crypto");
+
+const { logger } = require("@rootsmarket/observability/logger");
+const { withoutTracing } = require("@rootsmarket/observability/suppress");
+const { shutdownTracing } = require("@rootsmarket/observability/tracing");
+const {
+  createHttpMetricsMiddleware,
+  createRequestContextMiddleware,
+} = require("@rootsmarket/observability/http-metrics");
 
 const {
   register,
@@ -19,67 +26,39 @@ const app = express();
 const SERVICE_NAME = "user-service";
 const PORT = process.env.PORT || 3001;
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+
+const CORS_ORIGIN = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
-    origin: CORS_ORIGIN,
+    origin: CORS_ORIGIN.length ? CORS_ORIGIN : true,
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "traceparent",
+      "tracestate",
+      "baggage",
+      "x-request-id",
+    ],
+    exposedHeaders: ["traceparent", "x-request-id"],
   })
 );
 
 app.use(express.json());
 
-// Record Prometheus HTTP metrics for every request.
-app.use((req, res, next) => {
-  httpRequestsInFlight.inc();
+app.use(
+  createHttpMetricsMiddleware({
+    httpRequestsTotal,
+    httpRequestDuration,
+    httpRequestsInFlight,
+  })
+);
 
-  const end = httpRequestDuration.startTimer({
-    method: req.method,
-    route: req.path,
-  });
-
-  res.on("finish", () => {
-    end({
-      status: res.statusCode,
-    });
-
-    httpRequestsTotal.inc({
-      method: req.method,
-      route: req.path,
-      status: res.statusCode,
-    });
-
-    httpRequestsInFlight.dec();
-  });
-
-  next();
-});
-
-function log(level, message, meta = {}) {
-  console.log(
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      service: SERVICE_NAME,
-      level,
-      message,
-      ...meta,
-    })
-  );
-}
-
-// Add request ID to every request for traceability.
-app.use((req, res, next) => {
-  req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
-  res.setHeader("x-request-id", req.requestId);
-
-  log("info", "request_received", {
-    requestId: req.requestId,
-    method: req.method,
-    path: req.path,
-  });
-
-  next();
-});
+app.use(createRequestContextMiddleware(logger));
 
 const pool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
@@ -88,6 +67,14 @@ const pool = new Pool({
   user: process.env.POSTGRES_USER || "rootsmarket",
   password: process.env.POSTGRES_PASSWORD || "rootsmarket",
   max: Number(process.env.POSTGRES_POOL_MAX || 10),
+
+  // Default idleTimeoutMillis is 10s and the healthcheck runs every 15s, so
+  // the pool reaped its last connection between every check and each one
+  // paid a fresh TCP connect + DNS lookup. Holding connections past the
+  // healthcheck interval keeps one warm and removes that cost from real
+  // requests too.
+  idleTimeoutMillis: Number(process.env.POSTGRES_IDLE_TIMEOUT_MS || 30000),
+  keepAlive: true,
 });
 
 const redisClient = createClient({
@@ -95,9 +82,7 @@ const redisClient = createClient({
 });
 
 redisClient.on("error", (err) => {
-  log("error", "redis_error", {
-    error: err.message || err.code || String(err),
-  });
+  logger.error("redis_error", { error: err });
 });
 
 async function getCache(key) {
@@ -107,11 +92,7 @@ async function getCache(key) {
     const value = await redisClient.get(key);
     return value ? JSON.parse(value) : null;
   } catch (err) {
-    log("warn", "cache_get_failed", {
-      key,
-      error: err.message || String(err),
-    });
-
+    logger.warn("cache_get_failed", { key, error: err });
     return null;
   }
 }
@@ -122,10 +103,7 @@ async function setCache(key, value, ttl = CACHE_TTL_SECONDS) {
   try {
     await redisClient.set(key, JSON.stringify(value), { EX: ttl });
   } catch (err) {
-    log("warn", "cache_set_failed", {
-      key,
-      error: err.message || String(err),
-    });
+    logger.warn("cache_set_failed", { key, error: err });
   }
 }
 
@@ -137,53 +115,50 @@ async function deleteCache(keys) {
       await redisClient.del(keys);
     }
   } catch (err) {
-    log("warn", "cache_delete_failed", {
-      keys,
-      error: err.message || String(err),
-    });
+    logger.warn("cache_delete_failed", { keys, error: err });
   }
 }
 
-app.get("/health", async (req, res) => {
-  const health = {
-    status: "healthy",
-    service: SERVICE_NAME,
-    dependencies: {
-      postgres: "unknown",
-      redis: "unknown",
-    },
-  };
+app.get("/health", (req, res) =>
+  // Suppressed: the SELECT 1 and redis PING below are instrumented, and
+  // with /health excluded from HTTP tracing they would each become the
+  // root of their own orphan trace, every healthcheck interval.
+  withoutTracing(async () => {
+    const health = {
+      status: "healthy",
+      service: SERVICE_NAME,
+      dependencies: { postgres: "unknown", redis: "unknown" },
+    };
 
-  try {
-    await pool.query("SELECT 1");
-    health.dependencies.postgres = "healthy";
-  } catch {
-    health.status = "unhealthy";
-    health.dependencies.postgres = "unhealthy";
-  }
-
-  try {
-    if (redisClient.isOpen) {
-      await redisClient.ping();
-      health.dependencies.redis = "healthy";
-    } else {
-      health.dependencies.redis = "not_connected";
+    try {
+      await pool.query("SELECT 1");
+      health.dependencies.postgres = "healthy";
+    } catch {
+      health.status = "unhealthy";
+      health.dependencies.postgres = "unhealthy";
     }
-  } catch {
-    health.dependencies.redis = "unhealthy";
-  }
 
-  res.status(health.status === "healthy" ? 200 : 503).json(health);
-});
+    try {
+      if (redisClient.isOpen) {
+        await redisClient.ping();
+        health.dependencies.redis = "healthy";
+      } else {
+        health.dependencies.redis = "not_connected";
+      }
+    } catch {
+      health.dependencies.redis = "unhealthy";
+    }
+
+    res.status(health.status === "healthy" ? 200 : 503).json(health);
+  })
+);
 
 app.post("/users", async (req, res, next) => {
   try {
     const { name, email } = req.body;
 
     if (!name || !email) {
-      return res.status(400).json({
-        error: "name and email are required",
-      });
+      return res.status(400).json({ error: "name and email are required" });
     }
 
     const result = await pool.query(
@@ -199,7 +174,7 @@ app.post("/users", async (req, res, next) => {
 
     usersCreatedTotal.inc();
 
-    log("info", "user_created", {
+    logger.info("user_created", {
       requestId: req.requestId,
       userId: result.rows[0].id,
     });
@@ -207,9 +182,7 @@ app.post("/users", async (req, res, next) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.code === "23505") {
-      return res.status(409).json({
-        error: "email already exists",
-      });
+      return res.status(409).json({ error: "email already exists" });
     }
 
     next(err);
@@ -222,18 +195,11 @@ app.get("/users", async (req, res, next) => {
     const cached = await getCache(cacheKey);
 
     if (cached) {
-      log("info", "cache_hit", {
-        requestId: req.requestId,
-        key: cacheKey,
-      });
-
+      logger.info("cache_hit", { requestId: req.requestId, key: cacheKey });
       return res.json(cached);
     }
 
-    log("info", "cache_miss", {
-      requestId: req.requestId,
-      key: cacheKey,
-    });
+    logger.info("cache_miss", { requestId: req.requestId, key: cacheKey });
 
     const result = await pool.query(
       `
@@ -257,18 +223,11 @@ app.get("/users/:id", async (req, res, next) => {
     const cached = await getCache(cacheKey);
 
     if (cached) {
-      log("info", "cache_hit", {
-        requestId: req.requestId,
-        key: cacheKey,
-      });
-
+      logger.info("cache_hit", { requestId: req.requestId, key: cacheKey });
       return res.json(cached);
     }
 
-    log("info", "cache_miss", {
-      requestId: req.requestId,
-      key: cacheKey,
-    });
+    logger.info("cache_miss", { requestId: req.requestId, key: cacheKey });
 
     const result = await pool.query(
       `
@@ -280,9 +239,7 @@ app.get("/users/:id", async (req, res, next) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: "user not found",
-      });
+      return res.status(404).json({ error: "user not found" });
     }
 
     await setCache(cacheKey, result.rows[0]);
@@ -293,17 +250,15 @@ app.get("/users/:id", async (req, res, next) => {
   }
 });
 
-// Prometheus scrape endpoint.
 app.get("/metrics", async (req, res) => {
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
 });
 
 app.use((err, req, res, next) => {
-  log("error", "request_failed", {
+  logger.error("request_failed", {
     requestId: req.requestId,
-    error: err.message,
-    stack: process.env.NODE_ENV === "production" ? undefined : err.stack,
+    error: err,
   });
 
   res.status(500).json({
@@ -314,22 +269,17 @@ app.use((err, req, res, next) => {
 
 async function start() {
   await pool.query("SELECT 1");
-  log("info", "postgres_connected");
+  logger.info("postgres_connected");
 
   try {
     await redisClient.connect();
-    log("info", "redis_connected");
+    logger.info("redis_connected");
   } catch (err) {
-    log("warn", "redis_connection_failed_cache_disabled", {
-      error: err.message || String(err),
-    });
+    logger.warn("redis_connection_failed_cache_disabled", { error: err });
   }
 
   app.listen(PORT, () => {
-    log("info", "service_started", {
-      port: PORT,
-      corsOrigin: CORS_ORIGIN,
-    });
+    logger.info("service_started", { port: PORT, corsOrigin: CORS_ORIGIN });
   });
 }
 
@@ -339,25 +289,26 @@ async function shutdown() {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  log("info", "service_shutting_down");
+  logger.info("service_shutting_down");
 
   try {
     if (redisClient.isOpen) {
       await redisClient.quit();
     }
   } catch (err) {
-    log("warn", "redis_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("redis_shutdown_failed", { error: err });
   }
 
   try {
     await pool.end();
   } catch (err) {
-    log("warn", "postgres_shutdown_failed", {
-      error: err.message || String(err),
-    });
+    logger.warn("postgres_shutdown_failed", { error: err });
   }
+
+  // Last, and awaited: flush buffered spans before the process goes away.
+  // BatchSpanProcessor holds spans for up to 5s, so a consumer-only service
+  // like this can lose an entire run's worth on restart without it.
+  await shutdownTracing("shutdown");
 
   process.exit(0);
 }
@@ -366,9 +317,6 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 start().catch((err) => {
-  log("error", "service_start_failed", {
-    error: err.message || String(err),
-  });
-
+  logger.error("service_start_failed", { error: err });
   process.exit(1);
 });
