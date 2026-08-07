@@ -81,6 +81,21 @@ const pool = new Pool({
   // requests too.
   idleTimeoutMillis: Number(process.env.POSTGRES_IDLE_TIMEOUT_MS || 30000),
   keepAlive: true,
+
+  // Fail fast when Postgres is unreachable. Without this the pool waits
+  // indefinitely, /health never responds, and a probe cannot tell "down"
+  // from "slow" — curl reports 000 rather than an honest 503.
+  connectionTimeoutMillis: Number(process.env.POSTGRES_CONNECT_TIMEOUT_MS || 3000),
+});
+
+// pg.Pool emits "error" on idle clients when the server goes away. With no
+// listener Node treats it as an uncaught exception and the process dies —
+// exactly the amqplib failure mode, on the other dependency. The pool
+// reconnects on the next query by itself; it only needs to not crash first.
+pool.on("error", (err) => {
+  logger.warn("postgres_pool_error", {
+    error: err.message || String(err),
+  });
 });
 
 // Redis caches product reads.
@@ -300,6 +315,23 @@ app.get("/metrics", async (req, res) => {
 
 // Central error handler.
 app.use((err, req, res, next) => {
+  // 22P02 is invalid_text_representation: a malformed UUID or number in the
+  // request reached Postgres. That is a client error, not a server fault.
+  // Left as a 500 it inflates the 5xx ratio the alert rule watches, so a
+  // mistyped id during a demo would page someone. Logged at warn so it also
+  // stays out of the error panels.
+  if (err.code === "22P02") {
+    logger.warn("invalid_input_syntax", {
+      requestId: req.requestId,
+      error: err.message,
+    });
+
+    return res.status(400).json({
+      error: "malformed identifier in request",
+      requestId: req.requestId,
+    });
+  }
+
   logger.error("request_failed", {
     requestId: req.requestId,
     error: err,
@@ -313,8 +345,18 @@ app.use((err, req, res, next) => {
 
 // Start service. Postgres is required; Redis is optional cache.
 async function start() {
-  await pool.query("SELECT 1");
-  logger.info("postgres_connected");
+  // Do NOT exit when Postgres is unreachable at boot. Compose removes the
+  // DNS entry for a stopped container, so this throws ENOTFOUND, and
+  // process.exit(1) + restart:unless-stopped becomes a crash loop —
+  // the service is then unreachable rather than reporting 503 honestly.
+  try {
+    await pool.query("SELECT 1");
+    logger.info("postgres_connected");
+  } catch (err) {
+    logger.warn("postgres_initial_connect_failed", {
+      error: err.message || String(err),
+    });
+  }
 
   try {
     await redisClient.connect();
