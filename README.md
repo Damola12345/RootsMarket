@@ -10,8 +10,6 @@ A cloud-native microservices platform simulating an online African grocery
 marketplace — five Node.js services, event-driven over RabbitMQ, with a full
 observability stack and an end-to-end suite that verifies it.
 
----
-
 ## One order, one trace
 
 A single `POST /orders` produces one distributed trace spanning three services
@@ -116,9 +114,9 @@ Note that the three signals take three different paths — only traces go
 through the OpenTelemetry Collector:
 
 ```
-traces   services ──OTLP/http──▶ otel-collector ──OTLP/grpc──▶ Tempo
-logs     services ──stdout────▶ Docker ──socket──▶ Alloy ──push──▶ Loki
-metrics  services ──/metrics──◀ scraped by Prometheus
+traces   services ──OTLP/http── otel-collector ──OTLP/grpc──▶ Tempo
+logs     services ──stdout──── Docker ──socket── Alloy ──push── Loki
+metrics  services ──/metrics── scraped by Prometheus
 ```
 
 Detail in [docs/architecture.md](docs/architecture.md).
@@ -148,7 +146,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Wait for RabbitMQ (~90s cold start), then verify:
+Wait for RabbitMQ (90s cold start), then verify:
 
 ```bash
 ./scripts/e2e-test.sh
