@@ -1,0 +1,53 @@
+
+1. Containers healthy
+  PASS  19 running, none unhealthy
+
+2. Service health endpoints
+  PASS  user-service -> 200
+  PASS  product-service -> 200
+  PASS  order-service -> 200
+  PASS  payment-service -> 200
+  PASS  notification-service -> 200
+
+3. Prometheus scrape targets
+  PASS  16 targets, all UP
+  PASS  collector self-metrics reachable on :8888
+
+4. Malformed UUID returns 400, not 500
+  PASS  22P02 mapped to 400 (keeps the 5xx ratio meaningful)
+
+5. Create an order (exercises the full chain)
+        user=b3db3a4f-f55d-4951-8335-6f3c88176d6e product=d7a2d689-8720-4c0a-bdbe-baf821ce3966
+  PASS  order created: 7aebc3cd-a3da-481d-bb1b-c2a1fdd5dae0
+        waiting 10s for the async chain and the span batch...
+
+6. One trace ID across all three services
+        order=65f6ae417c6f8ad2b4a71f5ac301a617  payment=65f6ae417c6f8ad2b4a71f5ac301a617  notification=65f6ae417c6f8ad2b4a71f5ac301a617
+  PASS  propagation intact across two broker hops
+
+7. Trace queryable in Tempo with the full chain
+  PASS  Tempo has the full chain: notification-service,order-service,payment-service
+
+8. Log line carries that trace ID as structured metadata
+  PASS  5 stream(s) match on the trace_id label — derived field will resolve
+
+9. No all-zero trace IDs in logs
+  PASS  isSpanContextValid() guard holding
+
+10. Health checks are not creating orphan traces
+  PASS  0 root pg-pool.connect traces (startup only, expected)
+
+11. Graceful shutdown flushes spans
+        app shutdown at line 8, sdk flush at line 9
+  PASS  both ran, app first then SDK flush — shutdown race is fixed
+        order-service restarted
+
+12. Induced failure: postgres down
+        postgres stopped; generating traffic so the error ratio has a denominator...
+  PASS  user-service /health -> 503
+        active alerts: PostgresDown
+  PASS  alert rules reacted (state visible in UI)
+        postgres restarted; waiting 60s for recovery...
+  PASS  recovered within 60s
+
+19 passed, 0 failed
