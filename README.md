@@ -40,7 +40,7 @@ cardinality and the Grafana derived field matches on it directly.
 
 | Log → Trace | Trace → Logs |
 |---|---|
-| ![](docs/screenshots/02-log-to-trace.png) | ![](docs/screenshots/03-trace-to-logs.png) |
+| ![](docs/screenshot/02-log-to-trace.png) | ![](docs/screenshot/03-trace-to-logs.png) |
 
 Click a log line, land on its trace. Open a span, land on its logs, scoped to
 that service.
@@ -52,7 +52,7 @@ that service.
 Four dashboards — application, infrastructure, host, containers — plus 10 alert
 rules and 15 recording rules as version-controlled Prometheus config.
 
-![Alert firing](docs/screenshots/06-alert-firing.png)
+![Alert firing](docs/screenshot/06-alert-firing.png)
 
 `PostgresDown` fires on `pg_up == 0` rather than `up == 0`, because the
 exporter stays up and returns 200 while its backend is gone.
