@@ -15,7 +15,7 @@ observability stack and an end-to-end suite that verifies it.
 A single `POST /orders` produces one distributed trace spanning three services
 and two message-broker hops:
 
-![Distributed trace](docs/screenshots/01-distributed-trace.png)
+![Distributed trace](docs/screenshot/01-distributed-trace.png)
 
 ```
 order-service  POST /orders
@@ -47,7 +47,7 @@ that service.
 
 ## Dashboards and alerting
 
-![Overview dashboard](docs/screenshots/04-overview-dashboard.png)
+![Overview dashboard](docs/screenshot/04-overview-dashboard.png)
 
 Four dashboards — application, infrastructure, host, containers — plus 10 alert
 rules and 15 recording rules as version-controlled Prometheus config.
@@ -114,7 +114,7 @@ Note that the three signals take three different paths — only traces go
 through the OpenTelemetry Collector:
 
 ```
-traces   services ──OTLP/http── otel-collector ──OTLP/grpc──▶ Tempo
+traces   services ──OTLP/http── otel-collector ──OTLP/grpc── Tempo
 logs     services ──stdout──── Docker ──socket── Alloy ──push── Loki
 metrics  services ──/metrics── scraped by Prometheus
 ```
