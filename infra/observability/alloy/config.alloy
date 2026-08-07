@@ -1,3 +1,11 @@
+// Grafana Alloy — RootsMarket log collection
+//
+// One Docker discovery, split into two pipelines by the
+// com.rootsmarket.component label:
+//
+//   application -> structured JSON from the Node services
+//   platform    -> mixed formats from Grafana, Loki, Postgres, Redis, etc.
+
 discovery.docker "rootsmarket" {
   host = "unix:///var/run/docker.sock"
 
@@ -60,33 +68,54 @@ loki.source.docker "rootsmarket_application" {
 }
 
 loki.process "rootsmarket_application" {
+  // Extract only what a later stage consumes. Anything left in the extracted
+  // map is discarded at the end of the pipeline, so parsing message/method/
+  // path/status here would be per-line work for nothing. Those fields stay
+  // queryable regardless, because the raw JSON line is never rewritten
+  // (no stage.output) — `| json` recovers them at query time.
   stage.json {
     expressions = {
       level      = "level",
       timestamp  = "timestamp",
-      message    = "message",
-      request_id = "requestId",
       trace_id   = "traceId",
       span_id    = "spanId",
-      method     = "method",
-      path       = "path",
-      status     = "status",
+      request_id = "requestId",
     }
   }
 
+  // Only level becomes a label. Four values, so cardinality is bounded.
   stage.labels {
     values = {
       level = "",
     }
   }
 
-  stage.timestamp {
-    source = "timestamp"
-    format = "RFC3339Nano"
+  // Correlation IDs as structured metadata, NOT labels. Every trace_id is
+  // unique, so promoting it to a label would mint a new Loki stream per
+  // request and wreck the index. Structured metadata attaches it to the entry
+  // at no cardinality cost, and lets the Grafana derived field match on
+  // trace_id directly instead of regex-scanning the log line.
+  //
+  // This only applies at ingest — existing log lines do not gain it
+  // retroactively, so generate fresh traffic before testing.
+  stage.structured_metadata {
+    values = {
+      trace_id   = "",
+      span_id    = "",
+      request_id = "",
+    }
   }
 
-  // Preserve the original JSON line so requestId, traceId, spanId,
-  // method, path and status remain available as parsed fields.
+  // action_on_failure defaults to "fudge": on a non-JSON line (an uncaught
+  // exception stack trace, npm output) it silently assigns
+  // last-known-timestamp + 1ns — a fabricated time on exactly the lines you
+  // most need to trust. "skip" keeps the Docker scrape time instead.
+  stage.timestamp {
+    source            = "timestamp"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
   forward_to = [loki.write.default.receiver]
 }
 
@@ -143,8 +172,45 @@ loki.source.docker "rootsmarket_platform" {
 }
 
 loki.process "rootsmarket_platform" {
-  // Platform logs are preserved exactly as received because Grafana,
-  // Loki, PostgreSQL, Redis, RabbitMQ and exporters use mixed formats.
+  // Break the feedback loop. Loki emits one metrics.go line per query, Alloy
+  // ships it back into Loki, and a fast dashboard refresh turns that into a
+  // self-sustaining stream — it was the noisiest source in the whole stack.
+  stage.match {
+    selector            = "{service=\"loki\"} |~ \"caller=metrics\\\\.go\""
+    action              = "drop"
+    drop_counter_reason = "loki_query_log"
+  }
+
+  // Grafana, Loki, Tempo, Prometheus and Alloy all emit logfmt with level=.
+  // Without this label, the error panels line-scan every entry with a large
+  // case-insensitive regex, which is why those queries took seconds.
+  stage.regex {
+    expression = "level=(?P<level>[a-zA-Z]+)"
+  }
+
+  // Postgres uses its own format: "2026-07-31 10:37:25 UTC [1] LOG:  ...".
+  // Scoped with stage.match so the pattern only runs on postgres lines.
+  stage.match {
+    selector = "{service=\"postgres\"}"
+
+    stage.regex {
+      expression = "\\]\\s+(?P<level>LOG|ERROR|WARNING|FATAL|PANIC):"
+    }
+
+    // Normalise LOG/ERROR/WARNING to lowercase so one label value set covers
+    // both logfmt and Postgres sources.
+    stage.template {
+      source   = "level"
+      template = "{{ ToLower .Value }}"
+    }
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
   forward_to = [loki.write.default.receiver]
 }
 

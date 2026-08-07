@@ -1,4 +1,106 @@
-# Automatically provision Prometheus as Grafana's default data source.
+# # Automatically provision Prometheus as Grafana's default data source.
+# apiVersion: 1
+
+# datasources:
+#   - name: Prometheus
+#     uid: rootsmarket-prometheus
+#     type: prometheus
+#     access: proxy
+#     url: http://prometheus:9090
+
+#     # Make Prometheus the default data source.
+#     isDefault: true
+
+#     editable: false
+
+#     jsonData:
+#       timeInterval: 15s
+#       httpMethod: POST
+#       exemplarTraceIdDestinations:
+#         - name: trace_id
+#           datasourceUid: tempo
+
+
+#   - name: Loki
+#     uid: rootsmarket-loki
+#     type: loki
+#     access: proxy
+#     url: http://loki:3100
+#     isDefault: false
+#     editable: false
+
+#     jsonData:
+#       timeout: 60
+#       maxLines: 1000
+#       derivedFields:
+#         - name: TraceID
+#           matcherType: regex
+#           matcherRegex: '"traceId":"([a-f0-9]{32})"'
+#           url: '$${__value.raw}'
+#           urlDisplayLabel: 'View trace'
+#           datasourceUid: tempo
+
+
+#   - name: Tempo
+#     uid: rootsmarket-tempo
+#     type: tempo
+#     access: proxy
+#     url: http://tempo:3200
+#     isDefault: false
+#     editable: true
+
+#     jsonData:
+#       httpMethod: GET
+
+#       tracesToLogsV2:
+#         datasourceUid: rootsmarket-loki
+#         spanStartTimeShift: "-5m"
+#         spanEndTimeShift: "5m"
+#         tags:
+#           - key: service.name
+#             value: service
+#           - key: deployment.environment
+#             value: environment
+#         filterByTraceID: true
+#         filterBySpanID: false
+
+#       tracesToMetrics:
+#         datasourceUid: rootsmarket-prometheus
+#         spanStartTimeShift: "-5m"
+#         spanEndTimeShift: "5m"
+#         tags:
+#           - key: service.name
+#             value: service
+#           - key: deployment.environment
+#             value: environment
+#         # queries:
+#         #   - name: Request rate
+#         #     query: >-
+#         #       sum(rate(traces_spanmetrics_calls_total{
+#         #         service_name="$${__span.tags["service.name"]}"
+#         #       }[5m]))
+
+#         #   - name: Error rate
+#         #     query: >-
+#         #       sum(rate(traces_spanmetrics_calls_total{
+#         #         service_name="$${__span.tags["service.name"]}",
+#         #         status_code="STATUS_CODE_ERROR"
+#         #       }[5m]))
+
+#       serviceMap:
+#         datasourceUid: rootsmarket-prometheus
+
+#       nodeGraph:
+#         enabled: true
+
+#       search:
+#         hide: false
+
+#       lokiSearch:
+#         datasourceUid: rootsmarket-loki
+
+
+# Automatically provision Prometheus, Loki and Tempo.
 apiVersion: 1
 
 datasources:
@@ -7,82 +109,57 @@ datasources:
     type: prometheus
     access: proxy
     url: http://prometheus:9090
-
-    # Make Prometheus the default data source.
     isDefault: true
-
     editable: false
-
     jsonData:
       timeInterval: 15s
       httpMethod: POST
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: rootsmarket-tempo
 
   - name: Loki
     uid: rootsmarket-loki
     type: loki
     access: proxy
     url: http://loki:3100
-    isDefault: false
     editable: false
-
     jsonData:
-      timeout: 60
       maxLines: 1000
+      # matcherType: label reads trace_id from structured metadata, so this is
+      # a label lookup rather than a regex scan of every log line.
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: rootsmarket-tempo
+          url: '$${__value.raw}'
+          urlDisplayLabel: View trace
 
   - name: Tempo
     uid: rootsmarket-tempo
     type: tempo
     access: proxy
     url: http://tempo:3200
-    isDefault: false
-    editable: true
-
+    editable: false
     jsonData:
-      httpMethod: GET
-
+      # Requires stream_over_http_enabled: true in tempo.yml, otherwise Grafana
+      # attempts gRPC against the HTTP port and logs "frame too large".
+      streamingEnabled:
+        search: true
       tracesToLogsV2:
         datasourceUid: rootsmarket-loki
-        spanStartTimeShift: "-5m"
-        spanEndTimeShift: "5m"
-        tags:
-          - key: service.name
-            value: service
-          - key: deployment.environment
-            value: environment
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
         filterByTraceID: true
-        filterBySpanID: false
-
-      tracesToMetrics:
-        datasourceUid: rootsmarket-prometheus
-        spanStartTimeShift: "-5m"
-        spanEndTimeShift: "5m"
+        # Maps the span's service.name resource attribute onto the Loki
+        # `service` label so the jump is scoped to one stream.
         tags:
           - key: service.name
             value: service
-          - key: deployment.environment
-            value: environment
-        queries:
-          - name: Request rate
-            query: >-
-              sum(rate(traces_spanmetrics_calls_total{
-                service_name="$${__span.tags["service.name"]}"
-              }[5m]))
-
-          - name: Error rate
-            query: >-
-              sum(rate(traces_spanmetrics_calls_total{
-                service_name="$${__span.tags["service.name"]}",
-                status_code="STATUS_CODE_ERROR"
-              }[5m]))
-
       serviceMap:
         datasourceUid: rootsmarket-prometheus
-
       nodeGraph:
         enabled: true
-
       search:
         hide: false
-
-      lokiSearch:
-        datasourceUid: rootsmarket-loki

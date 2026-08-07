@@ -1,0 +1,33 @@
+
+#
+#   Prometheus Scrape Failures  ->  up == 0
+#   Exporter Error Signals      ->  up{component="exporter"} == 0
+#   Loki Operational Errors     ->  loki_request_duration_seconds_count{status_code=~"5.."}
+#   Lifecycle Signals           ->  cAdvisor restart counters
+#   Database Warning Signals    ->  pg_stat_database_* / postgres_exporter
+#   Messaging Error Signals     ->  rabbitmq_queue_* + RabbitMQNoConsumers alert
+groups:
+  - name: rootsmarket_platform_logs
+    interval: 30s
+    rules:
+
+      # Log volume per platform service. No metric equivalent exists.
+      - record: rootsmarket:platform_log_lines:rate5m
+        expr: |
+          sum by (service) (
+            rate({application="rootsmarket", log_type="platform"}[5m])
+          )
+
+      # Error-level lines per platform service. The regex is unavoidable here:
+      # platform components are mixed-format, so unlike the application logs
+      # there is no `level` stream label to filter on cheaply.
+      #
+      # This is the one expensive scan worth precomputing — it backs the log
+      # health panel on the Infrastructure dashboard, and evaluating it once
+      # every 30s beats every viewer re-running it on every refresh.
+      - record: rootsmarket:platform_log_errors:rate5m
+        expr: |
+          sum by (service) (
+            rate({application="rootsmarket", log_type="platform"}
+              |~ "(?i)(^|[[:space:]])(level|lvl|severity)=(error|err|fatal)([[:space:]]|$)|(^|[[:space:]])(ERROR|FATAL|PANIC)(:|[[:space:]])|\\[(error|fatal)\\]" [5m])
+          )
