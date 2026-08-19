@@ -2,12 +2,15 @@ extensions:
   health_check:
     endpoint: 0.0.0.0:13133
 
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    timeout: 10s
+
 receivers:
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
-
       http:
         endpoint: 0.0.0.0:4318
         cors:
@@ -23,7 +26,7 @@ processors:
   memory_limiter:
     check_interval: 1s
     limit_mib: 400
-    spike_limit_mib: 100
+    spike_limit_mib: 80
 
   resource:
     attributes:
@@ -35,12 +38,8 @@ processors:
         value: rootsmarket
         action: upsert
 
-      - key: telemetry.sdk.language
-        value: nodejs
-        action: insert
-
   batch:
-    timeout: 5s
+    timeout: 1s
     send_batch_size: 1024
     send_batch_max_size: 2048
 
@@ -49,6 +48,20 @@ exporters:
     endpoint: tempo:4317
     tls:
       insecure: true
+    timeout: 10s
+
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+      storage: file_storage/queue
 
   debug:
     verbosity: basic
@@ -56,17 +69,27 @@ exporters:
 service:
   extensions:
     - health_check
+    - file_storage/queue
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
 
   pipelines:
     traces:
       receivers:
         - otlp
-
       processors:
         - memory_limiter
         - resource
         - batch
-
       exporters:
         - otlp/tempo
-        - debug

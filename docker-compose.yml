@@ -1,7 +1,7 @@
 # Shared environment variables for Node.js services.
 x-common-env: &common-env
   NODE_ENV: ${NODE_ENV}
-  NODE_OPTIONS: --max-old-space-size=192
+  NODE_OPTIONS: --max-old-space-size=128
 
   POSTGRES_HOST: postgres
   POSTGRES_PORT: 5432
@@ -105,6 +105,7 @@ services:
     image: rabbitmq:${RABBITMQ_VERSION}
     container_name: rootsmarket-rabbitmq
     restart: unless-stopped
+    init: true
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
@@ -123,9 +124,10 @@ services:
     mem_limit: 512m
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 15s
       retries: 5
+      start_period: 120s
 
     labels:
       <<: *default-labels
@@ -414,9 +416,10 @@ services:
     ports:
       - "8080:8080"
     command:
-      - "--housekeeping_interval=15s"
-      - "--store_container_labels=true"
+      - "--housekeeping_interval=30s"
+      - "--store_container_labels=false"
       - "--disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory"
+      - "--whitelisted_container_labels=com.rootsmarket.project,com.rootsmarket.service,com.rootsmarket.component,com.rootsmarket.environment"
     volumes:
       - /:/rootfs:ro
       - /sys:/sys:ro
@@ -455,7 +458,7 @@ services:
       - prometheus-data:/prometheus
     networks:
       - rootsmarket-net
-    mem_limit: 512m
+    mem_limit: 1g
     labels:
       <<: *default-labels
       com.rootsmarket.service: prometheus
@@ -472,6 +475,7 @@ services:
     ports:
       - "3100:3100"
     volumes:
+      - ./infra/observability/loki/rules:/loki/rules:ro
       - ./infra/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki-data:/loki
     networks:
@@ -504,7 +508,7 @@ services:
       - loki
     networks:
       - rootsmarket-net
-    mem_limit: 256m
+    mem_limit: 512m
     labels:
       <<: *default-labels
       com.rootsmarket.service: alloy
@@ -573,19 +577,22 @@ services:
       - --config=/etc/otelcol-contrib/config.yml
     environment:
       DEPLOYMENT_ENVIRONMENT: ${NODE_ENV}
+    user: "0:0"
     volumes:
       - ./infra/observability/otel-collector/config.yml:/etc/otelcol-contrib/config.yml:ro
+      - otel-queue:/var/lib/otelcol/queue  
     ports:
       - "4317:4317"
       - "4318:4318"
       - "13133:13133"
+      - "8888:8888"
     restart: unless-stopped
     depends_on:
       tempo:
         condition: service_started 
     networks:
       - rootsmarket-net
-    mem_limit: 256m
+    mem_limit: 512m
     labels:
       <<: *default-labels
       com.rootsmarket.service: otel-collector
@@ -609,3 +616,4 @@ volumes:
   loki-data:
   alloy-data:
   tempo-data:
+  otel-queue:

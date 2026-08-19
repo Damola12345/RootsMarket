@@ -60,8 +60,69 @@ app.use(
 let rabbitConnection = null;
 let rabbitChannel = null;
 
+// rabbitReady, not "is rabbitChannel truthy". After the broker restarts, the
+// channel object still exists but is dead — so a truthiness check reports
+// healthy while the service consumes nothing. That is a silent failure the
+// whole observability stack cannot see: no error logs, no failed metric,
+// green health, and messages piling up unconsumed.
+let rabbitReady = false;
+let rabbitRetryTimer = null;
+
+const RABBITMQ_RETRY_MS = Number(process.env.RABBITMQ_RETRY_MS || 5000);
+
+function scheduleRabbitReconnect() {
+  if (isShuttingDown || rabbitRetryTimer) return;
+
+  rabbitRetryTimer = setTimeout(() => {
+    rabbitRetryTimer = null;
+
+    connectRabbitMQ().catch((err) => {
+      logger.warn("rabbitmq_reconnect_failed", {
+        error: err.message || String(err),
+        retryInMs: RABBITMQ_RETRY_MS,
+      });
+      scheduleRabbitReconnect();
+    });
+  }, RABBITMQ_RETRY_MS);
+}
+
+// Attach lifecycle handlers to a fresh connection.
+//
+// The 'error' listener is not optional: amqplib emits 'error' on the
+// connection, and an EventEmitter with no 'error' listener throws, killing the
+// process. That is what took payment-service down when the broker restarted.
+function wireRabbitLifecycle() {
+  rabbitConnection.on("error", (err) => {
+    logger.warn("rabbitmq_connection_error", {
+      error: err.message || String(err),
+    });
+  });
+
+  rabbitConnection.on("close", () => {
+    rabbitReady = false;
+    rabbitChannel = null;
+
+    if (isShuttingDown) return;
+
+    logger.warn("rabbitmq_connection_closed_reconnecting", {
+      retryInMs: RABBITMQ_RETRY_MS,
+    });
+    scheduleRabbitReconnect();
+  });
+
+  rabbitChannel.on("error", (err) => {
+    logger.warn("rabbitmq_channel_error", {
+      error: err.message || String(err),
+    });
+  });
+
+  rabbitChannel.on("close", () => {
+    rabbitReady = false;
+  });
+}
+
 app.get("/health", (req, res) => {
-  const rabbitHealthy = Boolean(rabbitChannel);
+  const rabbitHealthy = rabbitReady;
 
   res.status(rabbitHealthy ? 200 : 503).json({
     status: rabbitHealthy ? "healthy" : "unhealthy",
@@ -112,6 +173,8 @@ async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
+  wireRabbitLifecycle();
+
   await rabbitChannel.assertQueue(PAYMENT_COMPLETED_QUEUE, { durable: true });
 
   rabbitChannel.prefetch(1);
@@ -121,6 +184,8 @@ async function connectRabbitMQ() {
     PAYMENT_COMPLETED_QUEUE,
     handlePaymentCompleted
   );
+
+  rabbitReady = true;
 
   logger.info("rabbitmq_consumer_started", {
     consuming: PAYMENT_COMPLETED_QUEUE,
@@ -133,7 +198,16 @@ app.get("/metrics", async (req, res) => {
 });
 
 async function start() {
-  await connectRabbitMQ();
+  // A broker that is slow to accept connections should delay readiness, not
+  // kill the process — the same reconnect path handles both cases.
+  try {
+    await connectRabbitMQ();
+  } catch (err) {
+    logger.warn("rabbitmq_initial_connect_failed", {
+      error: err.message || String(err),
+    });
+    scheduleRabbitReconnect();
+  }
 
   app.listen(PORT, () => {
     logger.info("service_started", {

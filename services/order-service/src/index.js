@@ -82,16 +82,96 @@ const pool = new Pool({
   // requests too.
   idleTimeoutMillis: Number(process.env.POSTGRES_IDLE_TIMEOUT_MS || 30000),
   keepAlive: true,
+
+  // Fail fast when Postgres is unreachable. Without this the pool waits
+  // indefinitely, /health never responds, and a probe cannot tell "down"
+  // from "slow" — curl reports 000 rather than an honest 503.
+  connectionTimeoutMillis: Number(process.env.POSTGRES_CONNECT_TIMEOUT_MS || 3000),
+});
+
+// pg.Pool emits "error" on idle clients when the server goes away. With no
+// listener Node treats it as an uncaught exception and the process dies —
+// exactly the amqplib failure mode, on the other dependency. The pool
+// reconnects on the next query by itself; it only needs to not crash first.
+pool.on("error", (err) => {
+  logger.warn("postgres_pool_error", {
+    error: err.message || String(err),
+  });
 });
 
 let rabbitConnection = null;
 let rabbitChannel = null;
 
+// rabbitReady, not "is rabbitChannel truthy". After the broker restarts, the
+// channel object still exists but is dead — so a truthiness check reports
+// healthy while the service consumes nothing. That is a silent failure the
+// whole observability stack cannot see: no error logs, no failed metric,
+// green health, and messages piling up unconsumed.
+let rabbitReady = false;
+let rabbitRetryTimer = null;
+
+const RABBITMQ_RETRY_MS = Number(process.env.RABBITMQ_RETRY_MS || 5000);
+
+function scheduleRabbitReconnect() {
+  if (isShuttingDown || rabbitRetryTimer) return;
+
+  rabbitRetryTimer = setTimeout(() => {
+    rabbitRetryTimer = null;
+
+    connectRabbitMQ().catch((err) => {
+      logger.warn("rabbitmq_reconnect_failed", {
+        error: err.message || String(err),
+        retryInMs: RABBITMQ_RETRY_MS,
+      });
+      scheduleRabbitReconnect();
+    });
+  }, RABBITMQ_RETRY_MS);
+}
+
+// Attach lifecycle handlers to a fresh connection.
+//
+// The 'error' listener is not optional: amqplib emits 'error' on the
+// connection, and an EventEmitter with no 'error' listener throws, killing the
+// process. That is what took payment-service down when the broker restarted.
+function wireRabbitLifecycle() {
+  rabbitConnection.on("error", (err) => {
+    logger.warn("rabbitmq_connection_error", {
+      error: err.message || String(err),
+    });
+  });
+
+  rabbitConnection.on("close", () => {
+    rabbitReady = false;
+    rabbitChannel = null;
+
+    if (isShuttingDown) return;
+
+    logger.warn("rabbitmq_connection_closed_reconnecting", {
+      retryInMs: RABBITMQ_RETRY_MS,
+    });
+    scheduleRabbitReconnect();
+  });
+
+  rabbitChannel.on("error", (err) => {
+    logger.warn("rabbitmq_channel_error", {
+      error: err.message || String(err),
+    });
+  });
+
+  rabbitChannel.on("close", () => {
+    rabbitReady = false;
+  });
+}
+
 async function connectRabbitMQ() {
   rabbitConnection = await amqp.connect(RABBITMQ_URL);
   rabbitChannel = await rabbitConnection.createChannel();
 
+  wireRabbitLifecycle();
+
   await rabbitChannel.assertQueue(ORDER_CREATED_QUEUE, { durable: true });
+
+  rabbitReady = true;
 
   logger.info("rabbitmq_connected", { queue: ORDER_CREATED_QUEUE });
 }
@@ -140,7 +220,7 @@ app.get("/health", (req, res) =>
       health.dependencies.postgres = "unhealthy";
     }
 
-    if (rabbitChannel) {
+    if (rabbitReady) {
       health.dependencies.rabbitmq = "healthy";
     } else {
       health.status = "unhealthy";
@@ -379,6 +459,23 @@ app.get("/metrics", async (req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  // 22P02 is invalid_text_representation: a malformed UUID or number in the
+  // request reached Postgres. That is a client error, not a server fault.
+  // Left as a 500 it inflates the 5xx ratio the alert rule watches, so a
+  // mistyped id during a demo would page someone. Logged at warn so it also
+  // stays out of the error panels.
+  if (err.code === "22P02") {
+    logger.warn("invalid_input_syntax", {
+      requestId: req.requestId,
+      error: err.message,
+    });
+
+    return res.status(400).json({
+      error: "malformed identifier in request",
+      requestId: req.requestId,
+    });
+  }
+
   logger.error("request_failed", {
     requestId: req.requestId,
     error: err,
@@ -391,10 +488,29 @@ app.use((err, req, res, next) => {
 });
 
 async function start() {
-  await pool.query("SELECT 1");
-  logger.info("postgres_connected");
+  // Do NOT exit when Postgres is unreachable at boot. Compose removes the
+  // DNS entry for a stopped container, so this throws ENOTFOUND, and
+  // process.exit(1) + restart:unless-stopped becomes a crash loop —
+  // the service is then unreachable rather than reporting 503 honestly.
+  try {
+    await pool.query("SELECT 1");
+    logger.info("postgres_connected");
+  } catch (err) {
+    logger.warn("postgres_initial_connect_failed", {
+      error: err.message || String(err),
+    });
+  }
 
-  await connectRabbitMQ();
+  // A broker that is slow to accept connections should delay readiness, not
+  // kill the process — the same reconnect path handles both cases.
+  try {
+    await connectRabbitMQ();
+  } catch (err) {
+    logger.warn("rabbitmq_initial_connect_failed", {
+      error: err.message || String(err),
+    });
+    scheduleRabbitReconnect();
+  }
 
   app.listen(PORT, () => {
     logger.info("service_started", { port: PORT, corsOrigin: CORS_ORIGIN });

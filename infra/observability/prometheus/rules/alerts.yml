@@ -1,0 +1,181 @@
+groups:
+
+  # ------------------------------------------------------------- availability
+  - name: rootsmarket_availability
+    interval: 30s
+    rules:
+
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is not being scraped"
+          description: >-
+            Prometheus cannot reach {{ $labels.instance }}. Either the process
+            is down or /metrics stopped responding. This replaces grepping
+            Prometheus's own logs for "scrape failed" — the metric is
+            authoritative, the log line is a proxy.
+
+      - alert: HighErrorRatio
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            /
+          sum by (job) (rate(http_requests_total[5m]))
+            > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} 5xx ratio above 1%"
+          description: >-
+            Ratio, not count — a count-based rule pages on a traffic spike even
+            when the error *rate* is unchanged. Note this only counts 5xx:
+            4xx is the client's problem, and a malformed-UUID 400 should not
+            wake anyone.
+
+  # -------------------------------------------------------------- saturation
+  - name: rootsmarket_saturation
+    interval: 30s
+    rules:
+
+      # This is the alert that would have caught alloy at 239 MiB against a
+      # 256m limit without anyone reading a bar chart.
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+            /
+          container_spec_memory_limit_bytes{name!=""}
+            > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.name }} above 90% of its memory limit"
+          description: >-
+            Memory is incompressible: exceeding the limit is an OOMKill
+            (exit 137), not degradation. SIGKILL cannot be trapped, so there
+            will be no shutdown log and no final span flush. This alert is the
+            only warning you get.
+
+      # Regression guard. CPU limits were deliberately removed; this fires if
+      # one is ever reintroduced.
+      - alert: ContainerCPUThrottled
+        expr: |
+          rate(container_cpu_cfs_throttled_periods_total{name!=""}[5m])
+            /
+          rate(container_cpu_cfs_periods_total{name!=""}[5m])
+            > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.name }} CPU-throttled above 5%"
+          description: >-
+            CFS quota is enforced per 100ms window, so a container needing a
+            short burst is frozen for the rest of the window even on an idle
+            host. Presents as unexplained latency, never as a resource error.
+
+  # --------------------------------------------------------------- messaging
+  - name: rootsmarket_messaging
+    interval: 30s
+    rules:
+
+      - alert: RabbitMQQueueBacklog
+        expr: rabbitmq_queue_messages_ready > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.queue }} has unconsumed messages"
+          description: >-
+            Ready-messages climbing while unacked stays flat means a DEAD
+            consumer. Unacked climbing instead means a STUCK one — it took the
+            message and never acked. Different bugs, and the balanced
+            published/consumed counters on the Overview dashboard cannot tell
+            them apart in real time.
+
+      - alert: RabbitMQNoConsumers
+        expr: rabbitmq_queue_consumers == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.queue }} has no consumers attached"
+          description: >-
+            Also fires when a consumer double-acks: amqplib treats that as a
+            channel-level protocol error and closes the channel, so the
+            consumer detaches silently while the process stays up and healthy.
+
+  # ------------------------------------------------------- telemetry pipeline
+  - name: rootsmarket_telemetry
+    interval: 30s
+    rules:
+
+      # Watching the watchers. Without this, span loss is invisible — the
+      # symptom is "traces look incomplete", which is indistinguishable from a
+      # propagation bug and costs hours to diagnose.
+      - alert: SpanExportFailing
+        expr: |
+          rate(otelcol_exporter_send_failed_spans_total[5m]) > 0
+            or
+          rate(otelcol_exporter_send_failed_spans[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector cannot write spans to Tempo"
+          description: >-
+            Spans are being dropped between the services and Tempo. Check
+            otelcol_exporter_queue_size — if it is also climbing, the
+            sending_queue is absorbing the failure and nothing is lost yet.
+
+      - alert: CollectorQueueFilling
+        expr: otelcol_exporter_queue_size > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collector export queue above half capacity"
+          description: >-
+            queue_size is 1000. At capacity, new spans are dropped on the
+            floor. Usually means Tempo is slow or down.
+
+  # ------------------------------------------------------------ dependencies
+  - name: rootsmarket_dependencies
+    interval: 30s
+    rules:
+
+      # ServiceDown (up == 0) cannot see this. Postgres and Redis are not
+      # scrape targets — their exporters are, and an exporter stays up and
+      # returns 200 while reporting that its backend is gone. `up` stays 1
+      # for the entire outage.
+      #
+      # The gap was masked until the services stopped crash-looping. While
+      # they exited on a failed startup query, ServiceDown fired — but it was
+      # detecting the crash loop, not the database. Once they survived and
+      # reported 503 honestly, nothing alerted at all.
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: >-
+            Services now stay up and return 503 on /health rather than
+            exiting, so no process-level signal fires. Orders, payments and
+            user lookups all fail while every container reads healthy.
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis is unreachable"
+          description: >-
+            Not critical: getCache/setCache degrade to no-ops and reads fall
+            through to Postgres. Expect cache hit ratio at 0% and higher
+            Postgres load, not errors.
