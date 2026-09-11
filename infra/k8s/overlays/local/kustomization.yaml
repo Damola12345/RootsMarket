@@ -1,0 +1,39 @@
+# local — what runs on kind.
+#
+# An overlay patches base rather than copying it. Change base once and every
+# environment inherits it; change a replica count here and only local moves.
+# That is the whole argument for Kustomize over maintaining parallel copies.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+
+resources:
+  - ../../base
+
+replicas:
+  - name: user-service
+    count: 1
+  - name: product-service
+    count: 1
+  - name: order-service
+    count: 1
+  - name: payment-service
+    count: 1
+  - name: notification-service
+    count: 1
+  - name: frontend
+    count: 1
+
+patches:
+  # Verbose logging locally. A strategic-merge patch targeting every
+  # Deployment by label rather than naming each one.
+  - target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/component=backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: LOG_LEVEL
+          value: debug

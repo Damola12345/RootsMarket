@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: rootsmarket
+data:
+  rabbitmq.conf: |
+    vm_memory_high_watermark.absolute = 700MB
+    disk_free_limit.absolute = 1GB
+    log.console = true
+    log.console.level = info

@@ -1,0 +1,129 @@
+# RabbitMQ — StatefulSet.
+#
+# Unlike redis, losing this matters: durable queues hold messages that have
+# been published but not yet consumed. An order that made it to `order.created`
+# and no further is a paid-for order nobody processes.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: rootsmarket
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: messaging
+spec:
+  clusterIP: None          # headless — clustering needs per-pod DNS
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+    - name: metrics          # named, so a ServiceMonitor can select it by name
+      port: 15692
+      targetPort: metrics
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: rootsmarket
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: messaging
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/component: messaging
+    spec:
+      terminationGracePeriodSeconds: 60
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4-management-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - { name: amqp,       containerPort: 5672 }
+            - { name: management, containerPort: 15672 }
+            - { name: metrics,    containerPort: 15692 }
+
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef: { name: rootsmarket-secrets, key: RABBITMQ_USER }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef: { name: rootsmarket-secrets, key: RABBITMQ_PASSWORD }
+            - name: RABBITMQ_USE_LONGNAME
+              value: "false"
+          startupProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 15       
+
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 15
+
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 15
+
+          resources:
+            requests: { memory: "1Gi", cpu: "200m" }
+            limits:   { memory: "1Gi" }
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            - name: config
+              mountPath: /etc/rabbitmq/conf.d/10-rootsmarket.conf
+              subPath: rabbitmq.conf
+
+      # volumes: sits at pod level, sibling of containers:
+      volumes:
+        - name: config
+          configMap:
+            name: rabbitmq-config
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

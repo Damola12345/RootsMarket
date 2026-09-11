@@ -1,0 +1,165 @@
+# PostgreSQL — StatefulSet, not Deployment.
+#
+# WHY StatefulSet
+# A Deployment treats pods as interchangeable: it can create the replacement
+# before deleting the old one, and every replica shares one PVC. For a
+# database that is data corruption — two postgres processes writing the same
+# files.
+#
+# A StatefulSet gives three things a database needs:
+#
+#   1. Stable identity      pod is always `postgres-0`, not `postgres-7d4f-x2k`
+#   2. Stable storage       volumeClaimTemplates makes ONE PVC PER POD, and it
+#                           survives the pod being deleted and rescheduled
+#   3. Ordered operations   pod N is Ready before pod N+1 starts; deletion is
+#                           reverse order
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: rootsmarket
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  # clusterIP: None makes this HEADLESS — no virtual IP, no load balancing.
+  # DNS returns the pod IPs directly, and each pod gets its own record:
+  #     postgres-0.postgres.rootsmarket.svc.cluster.local
+  # That per-pod addressability is what a StatefulSet needs; with replication
+  # you must be able to reach a *specific* member, not "whichever one".
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+
+---
+# Schema and seed, mounted into the image's init directory. The official
+# postgres entrypoint runs everything in /docker-entrypoint-initdb.d exactly
+# once, on an empty data directory — same contract as the compose volume mount.
+#
+# In practice this file is generated rather than hand-maintained:
+#   kubectl create configmap postgres-init \
+#     --from-file=01-schema.sql=infra/db/schema.sql \
+#     --from-file=02-seed.sql=infra/db/seed.sql \
+#     -n rootsmarket --dry-run=client -o yaml > base/data/postgres-init.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: rootsmarket
+data:
+  01-schema.sql: |
+    -- Placeholder. Replace with infra/db/schema.sql using the command above.
+    SELECT 1;
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: rootsmarket
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres          # must match the headless Service above
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      terminationGracePeriodSeconds: 60   
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # fsGroup makes the kubelet chown the volume to this GID on mount.
+        # Without it a non-root process cannot write to a fresh PVC.
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: rootsmarket-config, key: POSTGRES_DB }
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: rootsmarket-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: rootsmarket-secrets, key: POSTGRES_PASSWORD }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          # Same three-probe split as the services, for the same reason.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            periodSeconds: 3
+            failureThreshold: 30      
+          livenessProbe:
+            tcpSocket:
+              port: postgres         
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            periodSeconds: 10
+            failureThreshold: 3
+
+          resources:
+            requests: { memory: "512Mi", cpu: "250m" }
+            limits:   { memory: "1Gi" }        # no cpu limit — see README
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            # NOT readOnlyRootFilesystem: postgres writes to its data dir and
+            # to /var/run/postgresql. The PVC covers the first; the emptyDir
+            # below covers the second.
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-init
+        - name: run
+          emptyDir: {}
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

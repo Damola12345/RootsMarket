@@ -1,0 +1,33 @@
+# kind cluster for RootsMarket.
+#   kind create cluster --config infra/k8s/cluster/kind-cluster.yaml
+# This file IS the infrastructure-as-code for local.
+#
+# Three nodes, not one. On a single node, DaemonSets, nodeSelector, pod
+# anti-affinity and topology spread are all no-ops — you write the YAML and
+# learn nothing, because there is nowhere else to schedule.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: rootsmarket
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      # ingress-nginx's kind manifest selects nodes with this label.
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # Everything reaches the cluster through the ingress controller;
+      # no per-service kubectl port-forward.
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+      - containerPort: 30081
+        hostPort: 30081
+        protocol: TCP
+
+  - role: worker
+  - role: worker
