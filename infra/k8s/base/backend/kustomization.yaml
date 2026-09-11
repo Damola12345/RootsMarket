@@ -1,0 +1,25 @@
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - user-service.yaml
+  - product-service.yaml
+  - order-service.yaml
+  - payment-service.yaml
+  - notification-service.yaml
+
+# Set here rather than in base/, so `kustomize edit set image` run from this
+# directory promotes only the backend — which is what a CI pipeline building
+# the Node services would want.
+images:
+  - name: rootsmarket/user-service
+    newTag: dev
+  - name: rootsmarket/product-service
+    newTag: dev
+  - name: rootsmarket/order-service
+    newTag: dev
+  - name: rootsmarket/payment-service
+    newTag: dev
+  - name: rootsmarket/notification-service
+    newTag: dev

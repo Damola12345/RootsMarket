@@ -1,0 +1,10 @@
+# PostgreSQL — StatefulSet, headless Service, PVC, init SQL.
+#
+# A StatefulSet, not a Deployment, for two reasons a database needs:
+#   · stable identity — postgres-0, not postgres-7d9f-x8k2
+#   · a PVC per replica that survives the pod
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres.yaml

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+ 
+# Order is not dependency order — kubectl apply is not sequenced, and a
+# Deployment applied before its ConfigMap simply retries until it resolves.
+# The order here is for humans reading the file.
+resources:
+  - namespaces
+  - config
+  - db
+  - cache
+  - messaging
+  - backend
+  - frontend
+ 
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: rootsmarket
+      app.kubernetes.io/managed-by: kustomize
