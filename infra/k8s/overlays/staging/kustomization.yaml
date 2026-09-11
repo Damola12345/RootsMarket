@@ -1,0 +1,32 @@
+# staging — closer to production shape. Not deployed yet; here so the
+# structure exists and local does not become the only way this can run.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+
+resources:
+  - ../../base
+
+replicas:
+  - name: user-service
+    count: 2
+  - name: product-service
+    count: 2
+  - name: order-service
+    count: 2
+  - name: payment-service
+    count: 2
+  - name: notification-service
+    count: 2
+
+patches:
+  - target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/component=backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OTEL_TRACES_SAMPLER_ARG
+          value: "0.1"
