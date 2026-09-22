@@ -37,26 +37,6 @@ spec:
       targetPort: postgres
 
 ---
-# Schema and seed, mounted into the image's init directory. The official
-# postgres entrypoint runs everything in /docker-entrypoint-initdb.d exactly
-# once, on an empty data directory — same contract as the compose volume mount.
-#
-# In practice this file is generated rather than hand-maintained:
-#   kubectl create configmap postgres-init \
-#     --from-file=01-schema.sql=infra/db/schema.sql \
-#     --from-file=02-seed.sql=infra/db/seed.sql \
-#     -n rootsmarket --dry-run=client -o yaml > base/data/postgres-init.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: postgres-init
-  namespace: rootsmarket
-data:
-  01-schema.sql: |
-    -- Placeholder. Replace with infra/db/schema.sql using the command above.
-    SELECT 1;
-
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

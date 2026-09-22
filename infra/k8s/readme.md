@@ -1,0 +1,1 @@
+kubectl -n rootsmarket get pods -w
