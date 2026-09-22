@@ -76,7 +76,8 @@ spec:
           livenessProbe:
             tcpSocket: { port: redis }
             periodSeconds: 20
-            failureThreshold: 3
+            failureThreshold: 6
+            timeoutSeconds: 5
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]

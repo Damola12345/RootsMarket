@@ -1,10 +1,24 @@
 # PostgreSQL — StatefulSet, headless Service, PVC, init SQL.
-#
-# A StatefulSet, not a Deployment, for two reasons a database needs:
-#   · stable identity — postgres-0, not postgres-7d9f-x8k2
-#   · a PVC per replica that survives the pod
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - postgres.yaml
+
+# Init SQL is GENERATED from the real files, not hand-maintained. A
+# hand-written ConfigMap holding a `SELECT 1;` placeholder ran successfully,
+# reported healthy, and created no tables. A generator cannot drift from its
+# source. Files must live under this directory — Kustomize refuses paths
+# outside the kustomization root.
+configMapGenerator:
+  - name: postgres-init
+    namespace: rootsmarket 
+    files:
+      - 01-schema.sql=sql/schema.sql    # lexical order = load order
+      - 02-seed.sql=sql/seed.sql
+
+generatorOptions:
+  # Stable name. A hash suffix would trigger a rollout on change, but the
+  # postgres entrypoint only runs init scripts on an EMPTY data directory,
+  # so a rollout would re-run nothing.
+  disableNameSuffixHash: true

@@ -82,8 +82,8 @@ spec:
             tcpSocket:
               port: http
             periodSeconds: 20
-            failureThreshold: 3
-            timeoutSeconds: 3
+            failureThreshold: 6
+            timeoutSeconds: 5
 
           readinessProbe:
             httpGet:

@@ -1,0 +1,44 @@
+
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: rootsmarket          # becomes k3d-rootsmarket in kubeconfig
+
+servers: 1
+agents: 0
+
+ports:
+  # NodePort 30080 → localhost:8080, for the Ingress later. Mapped straight to
+  # the server node because the k3d load balancer is disabled below.
+  - port: 8080:30080
+    nodeFilters:
+      - server:0:direct 
+
+options:
+  k3d:
+    wait: true
+    timeout: "180s"
+    # The k3d load balancer is an extra nginx container in front of the
+    # servers. With one server it balances nothing, so it is memory for no
+    # benefit on a machine with none to spare.
+    disableLoadbalancer: true
+
+  k3s:
+    extraArgs:
+      # Traefik: an Ingress controller we did not choose. When one is needed,
+      # it should be a deliberate decision recorded in git, not a default.
+      - arg: "--disable=traefik"
+        nodeFilters:
+          - server:*
+      # ServiceLB (Klipper): turns LoadBalancer Services into host ports.
+      # Everything here is ClusterIP reached by port-forward, so it is unused.
+      - arg: "--disable=servicelb"
+        nodeFilters:
+          - server:*
+      # metrics-server stays ENABLED on purpose. It is what makes
+      # `kubectl top` work — which was unavailable on kind, exactly when it
+      # would have diagnosed the CPU starvation.
+
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true
