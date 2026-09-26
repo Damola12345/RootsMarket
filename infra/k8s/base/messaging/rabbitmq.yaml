@@ -100,7 +100,7 @@ spec:
             timeoutSeconds: 15
 
           resources:
-            requests: { memory: "1Gi", cpu: "200m" }
+            requests: { memory: "384Mi", cpu: "200m" }
             limits:   { memory: "1Gi" }
 
           securityContext:
