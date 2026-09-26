@@ -37,3 +37,25 @@ patches:
         value:
           name: LOG_LEVEL
           value: debug
+
+  - target:
+      kind: Deployment
+      labelSelector: app.kubernetes.io/component=backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+  - target:
+      kind: StatefulSet
+      name: rabbitmq
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 256Mi
