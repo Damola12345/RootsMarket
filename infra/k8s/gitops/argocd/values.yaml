@@ -1,0 +1,76 @@
+
+global:
+  domain: localhost
+
+dex:
+  enabled: false
+
+# Notifications: Slack/webhook on sync events. Nothing to notify.
+notifications:
+  enabled: false
+
+applicationSet:
+  replicas: 0
+
+configs:
+  params:
+    # Serve plain HTTP. The UI is reached by port-forward on localhost, so
+    # TLS would only add a self-signed-certificate warning to click through.
+    # NOT for any cluster reachable from a network.
+    server.insecure: true
+
+  cm:
+    
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil then
+        if obj.status.health ~= nil then
+          hs.status = obj.status.health.status
+          if obj.status.health.message ~= nil then
+            hs.message = obj.status.health.message
+          end
+        end
+      end
+      return hs
+
+
+controller:
+  readinessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+  # Memory grows with the number of resources it tracks. ~60 here.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 512Mi }
+
+repoServer:
+  repoServer:
+  livenessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+    periodSeconds: 20
+  readinessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 384Mi }
+
+server:
+  livenessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+    periodSeconds: 20
+  readinessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 128Mi }
+
+redis:
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits:   { memory: 64Mi }

@@ -1,0 +1,31 @@
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rootsmarket
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Damola12345/RootsMarket.git
+    targetRevision: features/develop
+    path: infra/k8s/overlays/local
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rootsmarket
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      # A first sync can race the SealedSecret controller decrypting the
+      # Secret. Retry with backoff rather than sit in a failed state.
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
