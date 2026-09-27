@@ -181,7 +181,3 @@ Real failures from building this, with the line that identified each.
 | Pod killed, exit code **0**, `Completed` | a liveness probe killed it and the app shut down gracefully. Exit-code alerting sees nothing wrong |
 | `Insufficient memory` while `kubectl top` shows the node half empty | requests, not usage |
 | Argo CD Application stuck `Unknown` | it could not fetch or render the source — always a repo or chart problem, never cluster state |
-
-Two habits that shortened most of these: read the **innermost** frame of a
-wrapped error, and read the **live object**, not the manifest you think you
-applied.
