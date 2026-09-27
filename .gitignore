@@ -1,4 +1,5 @@
 node_modules
 dist
 .env
-**/.env
+**/.envinfra/k8s/base/config/secret.yaml
+infra/k8s/base/config/secret.yaml

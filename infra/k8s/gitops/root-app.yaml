@@ -1,0 +1,29 @@
+# Root Application — the app-of-apps.
+#
+# Applied once by hand (./scripts/argocd-bootstrap.sh root). After that, it
+# watches infra/k8s/gitops/applications/ and creates one Argo CD Application
+# for every file in it. Adding a component to the cluster means adding a file
+# to that directory and pushing — nothing is applied with kubectl any more.
+#
+# Argo CD syncs from GITHUB, not from your laptop. An unpushed change does
+# not exist as far as the cluster is concerned. This is the single biggest
+# habit change from running kubectl apply.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Damola12345/RootsMarket.git
+    targetRevision: features/develop
+    path: infra/k8s/gitops/applications
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true      # an Application file deleted from git is removed
+      selfHeal: true   # an Application edited by hand is reverted to git
