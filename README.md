@@ -2,6 +2,8 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-20.x-339933?logo=node.js)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-k3d%20%2B%20Kustomize-326CE5?logo=kubernetes)
+![Argo CD](https://img.shields.io/badge/GitOps-Argo%20CD-EF7B4D?logo=argo)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-instrumented-425CC7?logo=opentelemetry)
 ![E2E](https://img.shields.io/badge/E2E-19%2F19%20passing-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -102,6 +104,40 @@ here. A sample of what the stack surfaced once it could see itself:
   database. Once services survived and reported 503 honestly, nothing alerted
   at all.
 
+## Also runs on Kubernetes, managed by Argo CD
+ 
+The same images, deployed to a cluster and synced from this repository. No
+application code changed — the instrumentation reads its endpoint from the
+environment and does not know what is running it.
+ 
+```
+$ ./scripts/e2e-k8s.sh --with-failure
+...
+17 passed, 0 failed, 6 skipped
+```
+ 
+The induced-failure run is the interesting one. Postgres is scaled to zero and:
+ 
+- services return **503** on `/health` rather than exiting
+- **readiness** removes them from their Services
+- **liveness** leaves them alone — no pod restarts
+- everything recovers unaided when Postgres returns
+- the test row written earlier is still there: the StatefulSet reattached the
+  same PVC
+That is the three-probe split doing its job. `startup` asks whether the
+process bound its port, `liveness` whether it is wedged, `readiness` whether it
+can serve — and only the last one should care about a dependency. Using
+`httpGet /health` as a startup probe is the Kubernetes form of an `exit(1)`
+crash loop: the container is killed for waiting on a database it cannot
+influence.
+ 
+Secrets are encrypted in git with Sealed Secrets; the decryption key never
+leaves the cluster. Argo CD's `selfHeal` means the cluster is no longer
+changed with kubectl — edit, commit, push.
+ 
+Setup, trade-offs and a troubleshooting log: [**infra/k8s/README.md**](infra/k8s/README.md)
+
+
 ## Architecture
 
 ![High-level architecture](docs/diagrams/system_architecture.png)
@@ -122,7 +158,7 @@ metrics  services ──/metrics── scraped by Prometheus
 Detail in [docs/architecture.md](docs/architecture.md).
 
 ## Technology
-
+ 
 | Layer | Technology |
 |--------|------------|
 | Frontend | React, Vite |
@@ -135,7 +171,9 @@ Detail in [docs/architecture.md](docs/architecture.md).
 | Logs | Alloy → Loki |
 | Metrics | prom-client → Prometheus |
 | Dashboards | Grafana |
-| Next | Kubernetes, GitOps |
+| Orchestration | Kubernetes (k3d local), Kustomize |
+| Delivery | Argo CD, Sealed Secrets |
+
 
 ## Quick start
 
@@ -168,6 +206,7 @@ Wait for RabbitMQ (90s cold start), then verify:
 | [docs/architecture.md](docs/architecture.md) | Service boundaries and event flow |
 | [docs/observability.md](docs/observability.md) | Instrumentation, correlation, alert rules |
 | [docs/decisions.md](docs/decisions.md) | Engineering trade-offs |
+| [infra/k8s/README.md](infra/k8s/README.md) | Kubernetes: probes, resources, secrets, troubleshooting |
 
 ## Roadmap
 
@@ -176,5 +215,7 @@ Wait for RabbitMQ (90s cold start), then verify:
 - [x] Log ↔ trace correlation
 - [x] Dashboards, alerting, recording rules
 - [x] End-to-end verification suite
-- [ ] Kubernetes migration
-- [ ] GitOps delivery
+- [x] GitOps delivery — Argo CD app-of-apps, secrets sealed in git
+- [ ] Observability stack on-cluster (the 6 SKIPped E2E checks)
+- [ ] Kafka in place of RabbitMQ — replay and fan-out
+- [ ] AI incident assistant over the induced-failure corpus
